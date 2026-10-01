@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Garden Gate (Preview)
+Comment=Download selected iCloud Drive files to a local inbox
+Exec=gardengate manage
+Icon=folder-download
+Terminal=false
+Type=Application
+Categories=Utility;FileTools;
+StartupNotify=false

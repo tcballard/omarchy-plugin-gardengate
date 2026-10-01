@@ -1,0 +1,6 @@
+{
+  "fixture": "io.github.tcballard.gardengate-launcher",
+  "mode": "static-launcher",
+  "command": ["~/.local/bin/gardengate", "manage"],
+  "note": "Documentation fixture only; not executed and not live-shell evidence."
+}

@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.tcballard.gardengate",
+  "name": "Garden Gate",
+  "version": "0.0.1",
+  "author": "Tom Ballard",
+  "license": "MIT",
+  "description": "Bring files from iCloud Drive to your Omarchy desktop.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Garden Gate",
+    "description": "Bring files from iCloud Drive to your Omarchy desktop.",
+    "category": "Other",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {},
+    "schema": []
+  }
+}

@@ -1,0 +1,11 @@
+[Unit]
+Description=Garden Gate manual download
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/gardengate pull --apply
+TimeoutStartSec=360
+TimeoutStopSec=10
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=true

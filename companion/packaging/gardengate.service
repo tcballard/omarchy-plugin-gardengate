@@ -1,0 +1,15 @@
+[Unit]
+Description=Garden Gate background downloads (developer preview)
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/gardengate watch
+Restart=on-failure
+RestartSec=60
+TimeoutStopSec=10
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
