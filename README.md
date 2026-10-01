@@ -1,10 +1,6 @@
 # Garden Gate
 
-<p>
-  <a href="https://github.com/tcballard/omarchy-plugin-gardengate/actions/workflows/test.yml"><img alt="CI status" height="20" src="https://github.com/tcballard/omarchy-plugin-gardengate/actions/workflows/test.yml/badge.svg"></a>
-  <a href="LICENSE"><img alt="License: MIT" height="20" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <a href="https://github.com/tcballard/omarchy-badges"><img alt="Built for Omarchy: Plugin" height="20" src="https://raw.githubusercontent.com/tcballard/omarchy-badges/75975e5b5bf75e7ede3764bcd2950046f7abfe2c/badges/v1/omarchy-plugin.svg"></a>
-</p>
+[![Built for Omarchy: Plugin](https://raw.githubusercontent.com/tcballard/omarchy-badges/75975e5b5bf75e7ede3764bcd2950046f7abfe2c/badges/v1/omarchy-plugin.svg)](https://github.com/tcballard/omarchy-badges)
 
 Bring files from your iPhone's iCloud Drive to an ordinary folder on your Omarchy desktop.
 
