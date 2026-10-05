@@ -1,5 +1,41 @@
 # Verification — 1 October 2026
 
+## Graphical setup and gate widget — 5 October 2026, preview 0.0.2
+
+The bar now draws a theme-coloured gate. First use opens graphical Apple Account, password and verification-code prompts, followed by a cloud-folder browser and local destination prompt. Download approval remains separate. Dialogs request compact floating placement for their own PID using current Hyprland dispatches with a legacy fallback. Existing CLI commands remain available.
+
+Reproduced on the build host: formatting, strict Clippy, seven core tests, two setup unit tests, two integration tests using checksum-verified rclone 1.75.1, eight installer ownership tests, and a release build. The compiled companion passed a stubbed desktop/provider wizard covering password whitespace, cancellation preserving the existing encrypted connection, folder selection and an unapproved download plan. Real rclone confirmed the noninteractive configuration protocol through the password prompt without submitting Apple credentials.
+
+The actual installer payload passed fresh/repeat installation, the previous 0.0.1 installer-to-0.0.2 upgrade, clean owned plugin replacement with `--update-plugin`, refusal of a modified widget or binary, uninstall and inbox retention. The exact shell launcher still passes its stdin confirmation regression. Desktop commands were stubbed; the root-only local fixture simulated a non-root identity.
+
+The user's XPS screenshot confirms the previous management menu launched and tiled too large. The new gate rendering, floating dialog geometry, live Secret Service, Apple login/2FA and iPhone-to-XPS transfer remain unverified on Omarchy. These are preview artifacts, not a live-accepted release.
+
+```bash
+./tests/run
+python3 scripts/build-installer.py
+python3 tests/test_desktop_setup.py companion/target/release/gardengate
+python3 tests/test_installer_bundle.py dist/gardengate-0.0.2-linux-x86_64.run
+```
+
+## Prebuilt installer — 5 October 2026
+
+XPS testing found the first installer consumed stdin as embedded Python source, causing pacman's confirmation to receive EOF. The launcher now reads source from file descriptor 3 and preserves stdin for child commands. A regression test exercises the exact generated shell launcher and a child confirmation prompt with an explicit `y` response; it must fail with the old launcher and pass with the fixed one. Real Apple/desktop acceptance remains outstanding.
+
+Added an x86_64 Linux test installer containing the compiled companion, exact source Git bundle, services, launcher and an ownership-aware uninstaller. No compiler is required on the XPS. The builder requires a clean committed tree and writes source SHA, toolchain, embedded-file sizes/hashes and a complete installer checksum. Toolchain is pinned to Rust 1.88.0. Built on Ubuntu 24.04; the binary requires glibc 2.39+ and libgcc_s.so.1 (Omarchy runtime packages).
+
+Reproduced: release build and binary `--version`; format and strict Clippy; seven Rust core tests; eight installer ownership tests; bundled-source clone and Git origin/tracking setup; actual embedded installer fresh/repeat install, modified-file refusal, removal and inbox retention. Installer integration uses stubbed desktop commands, a temporary home and, in root-only build sandboxes, a simulated non-root identity. CI runs the same fixture as an ordinary runner user. This does not validate live Omarchy, pacman, systemd, keyring, Apple login or transfers. The two real-rclone integration tests were not rerun for these installer-only changes.
+
+The installer installs missing runtime packages through sudo/pacman; this branch of the flow still needs live Arch testing. It does not authenticate to Apple or enable background downloads. Existing bar plugins are preserved. Modified or untracked companion destinations are refused. The prebuilt workflow creates test artifacts; it does not tag or publish a GitHub release. Original live-acceptance gaps below remain open.
+
+Reproduce from a clean checkout:
+
+```bash
+./tests/run
+python3 scripts/build-installer.py
+bash dist/gardengate-0.0.1-linux-x86_64.run --check
+python3 tests/test_installer_bundle.py dist/gardengate-0.0.1-linux-x86_64.run
+```
+
 Scope: download-only developer preview 0.0.1. Source identity: the Git commit containing this file; no compiled binary is committed. Spec remains proposed broader scope, not an implementation claim.
 
 ## Garden Gate adaptation

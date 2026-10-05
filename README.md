@@ -4,11 +4,12 @@
 
 Bring files from your iPhone's iCloud Drive to an ordinary folder on your Omarchy desktop.
 
-**0.0.1 developer preview.** Garden Gate is a hosted Quattro bar widget plus a Rust companion. Click the widget to open the Qt management menu. The companion downloads a selected folder, preserves local edits and keeps recovery copies. It never uploads to or deletes from iCloud.
+**0.0.2 developer preview.** Garden Gate is a hosted Quattro bar widget plus a Rust companion. Click the widget to open the Qt management menu. The companion downloads a selected folder, preserves local edits and keeps recovery copies. It never uploads to or deletes from iCloud.
 
 ## Features
 
-- Open management from a horizontal or vertical Quattro bar.
+- Open management from a theme-coloured gate icon on horizontal or vertical bars.
+- Connect Apple and complete verification in desktop dialogs, then browse iCloud folders.
 - Download one selected iCloud Drive folder into a local inbox.
 - Preserve local edits, replaced versions and competing cloud copies.
 - Pause/resume optional background downloads and open the inbox.
@@ -21,10 +22,26 @@ Two-way sync, Apple Notes/Photos, Reflect container support, live bar status and
 - rclone 1.75.1+ (transport tests used 1.75.1).
 - libsecret with a running, unlocked desktop Secret Service.
 - kdialog for the Qt management menu and systemd user services for background downloads.
-- Rust/Cargo to build the companion from this source checkout; no prebuilt Garden Gate release is available yet.
+- Python 3 (included with Omarchy) to run the prebuilt installer. Rust/Cargo are only needed by developers building from source.
 - An Apple Account with iCloud Drive and access to its sign-in/2FA flow.
 
 ## Installation
+
+### Prebuilt developer preview (no compiler needed)
+
+Download `gardengate-0.0.2-linux-x86_64.run` from the **Prebuilt installer** workflow artifact or the provided test download. In a terminal, run it as your normal desktop user:
+
+```bash
+bash ~/Downloads/gardengate-0.0.2-linux-x86_64.run
+```
+
+The installer includes the compiled companion and the exact plugin source. It asks sudo to install missing runtime packages (`rclone`, `libsecret`, `kdialog`, `git`, `xdg-utils`), then installs per-user files and adds/enables the bar plugin through Omarchy's plugin manager. It never downloads a compiler. Python 3, systemd user services, glibc 2.39+ and x86_64 Linux are required. Source and embedded-file hashes are recorded in the build manifest; `--check` verifies the embedded payload without installing.
+
+An existing bar plugin is left unchanged unless you pass `--update-plugin`. That option updates only a clean checkout at a revision recorded by the prebuilt installer; local changes, extra files and unowned revisions are refused. Unmanaged or locally modified companion files also block installation. If you installed an earlier source preview, remove that companion with its original uninstaller first; your inbox, credentials and recovery copies are retained. On upgrade, stop both `gardengate.service` and `gardengate-pull.service` first. The installer leaves them stopped. Use `--no-plugin` to install only the companion.
+
+The installer does not sign into Apple or enable background downloads. Continue with **Connect your iPhone** below. This is a test artifact, not a live-validated public release.
+
+### Build from source
 
 The plugin manager installs the shell widget. Install its companion separately; plugin add does not build code, install packages or sign into Apple.
 
@@ -38,11 +55,23 @@ omarchy plugin add "$(pwd)" --enable
 
 ## Usage
 
-Add Garden Gate to your bar through your shell's widget configuration. The widget ID is `io.github.tcballard.gardengate`. It uses a compact `GG` label on vertical bars. Left-click opens management; the button does not indicate sync status.
+Add Garden Gate to your bar through your shell's widget configuration. The widget ID is `io.github.tcballard.gardengate`. A drawn gate replaces the text label in both orientations and follows the bar's foreground colour. Left-click opens management; the icon does not indicate sync status.
 
 ### Connect your iPhone
 
-Create **Omarchy Inbox** under **Files → iCloud Drive** on your iPhone and save a small test document there. Connect on the XPS:
+Create **Omarchy Inbox** under **Files → iCloud Drive** on your iPhone and save a small test document there. Click the gate icon on your XPS, or run:
+
+```bash
+~/.local/bin/gardengate manage
+```
+
+First launch opens the setup wizard. Choose **Connect Apple Account**, enter your Apple email/password, and approve sign-in on your iPhone. Enter the verification code in the next dialog. Remote naming, iCloud Drive selection and advanced defaults are handled automatically. Choose **Already connected — choose a folder** if you completed sign-in earlier.
+
+Browse to **Omarchy Inbox**, choose **Download this folder**, and accept or change the local destination. Review the plan, then choose **Download now** from management. The new dialogs request a compact floating position on the focused dialog's monitor, with modern and legacy Hyprland dispatch support. These window requests still need an XPS visual check.
+
+Setup edits an encrypted staging configuration and commits it only after verifying folder access. Cancelling keeps the previous connection. Passwords and answers travel to the rclone child through its environment, not process arguments or shell history; setup disables inherited rclone debug/log overrides. The shell widget never handles credentials.
+
+The terminal workflow remains available for troubleshooting:
 
 ```bash
 ~/.local/bin/gardengate connect
@@ -77,7 +106,7 @@ The first successful manual download approves background transfers. The watcher 
 | `companion/` | Rust CLI, reconciliation, recovery and watcher |
 | rclone 1.75.1+ | Unofficial iCloud Drive transport and Apple authentication |
 | Secret Service / libsecret | Encrypted config unlock key in the desktop keyring |
-| kdialog | Basic Qt management menu |
+| kdialog | Guided sign-in, folder browser and management dialogs |
 | systemd user services | Optional watcher and manual download job |
 
 ## Security and data
@@ -88,7 +117,7 @@ This name introduces separate `gardengate` state, services and keyring identity.
 
 ## Compatibility
 
-Intended for Omarchy 4 with Quattro plugin support, x86_64 Linux. **No live Omarchy revision has been tested.** Portable manifest checks and Rust tests are separate from live acceptance. Apple login, iPhone → XPS transfer, keyring, kdialog, widget launch and systemd remain untested on the real desktop. `preview.svg` is a labelled design placeholder, not a screenshot.
+Intended for Omarchy 4 with Quattro plugin support, x86_64 Linux. The user's XPS screenshot confirms the earlier management menu launched, but was tiled too large. No exact live Omarchy revision is recorded. The new wizard, gate icon and floating-window behaviour still need live acceptance. Real Apple login, iPhone → XPS transfer, keyring and systemd are not yet verified. `preview.svg` is a labelled design placeholder, not a screenshot.
 
 ## Development and validation
 
@@ -110,6 +139,8 @@ RCLONE_TEST_BIN=/absolute/path/to/rclone cargo test --locked --test transport --
 See [verification](companion/VERIFICATION.md) for reproduced and unrun checks, and [design](DESIGN.md) for the implementation record.
 
 ## Update
+
+For a prebuilt installation, download and run the new installer after stopping the two Garden Gate services. It replaces only unchanged files recorded by the previous prebuilt installer. Restart the background service afterwards only if you had already enabled it.
 
 Update the shell widget:
 
@@ -133,6 +164,14 @@ omarchy plugin remove io.github.tcballard.gardengate
 ```
 
 Removing the widget leaves the companion and its services installed. To remove those too, run `bash companion/scripts/uninstall.sh` from the checkout. Inbox files, encrypted config, keyring entry and recovery copies are retained.
+
+For a **prebuilt** installation, remove the companion using its ownership-aware uninstaller instead:
+
+```bash
+python3 ~/.local/share/gardengate/installer/uninstall.py --uninstall
+```
+
+This refuses to delete modified installed files. The bar plugin is removed separately with the command above. Inbox files, credentials and recovery copies are retained.
 
 ## License
 
