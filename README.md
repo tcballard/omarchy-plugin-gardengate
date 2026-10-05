@@ -21,10 +21,26 @@ Two-way sync, Apple Notes/Photos, Reflect container support, live bar status and
 - rclone 1.75.1+ (transport tests used 1.75.1).
 - libsecret with a running, unlocked desktop Secret Service.
 - kdialog for the Qt management menu and systemd user services for background downloads.
-- Rust/Cargo to build the companion from this source checkout; no prebuilt Garden Gate release is available yet.
+- Python 3 (included with Omarchy) to run the prebuilt installer. Rust/Cargo are only needed by developers building from source.
 - An Apple Account with iCloud Drive and access to its sign-in/2FA flow.
 
 ## Installation
+
+### Prebuilt developer preview (no compiler needed)
+
+Download `gardengate-0.0.1-linux-x86_64.run` from the **Prebuilt installer** workflow artifact or the provided test download. In a terminal, run it as your normal desktop user:
+
+```bash
+bash ~/Downloads/gardengate-0.0.1-linux-x86_64.run
+```
+
+The installer includes the compiled companion and the exact plugin source. It asks sudo to install missing runtime packages (`rclone`, `libsecret`, `kdialog`, `git`, `xdg-utils`), then installs per-user files and adds/enables the bar plugin through Omarchy's plugin manager. It never downloads a compiler. Python 3, systemd user services, glibc 2.39+ and x86_64 Linux are required. Source and embedded-file hashes are recorded in the build manifest; `--check` verifies the embedded payload without installing.
+
+An existing bar plugin is left unchanged. Unmanaged or locally modified companion files block installation rather than being overwritten. If you installed an earlier source preview, remove that companion with its original uninstaller first; your inbox, credentials and recovery copies are retained. On upgrade, stop both `gardengate.service` and `gardengate-pull.service` first. The installer leaves them stopped. Use `--no-plugin` to install only the companion.
+
+The installer does not sign into Apple or enable background downloads. Continue with **Connect your iPhone** below. This is a test artifact, not a live-validated public release.
+
+### Build from source
 
 The plugin manager installs the shell widget. Install its companion separately; plugin add does not build code, install packages or sign into Apple.
 
@@ -111,6 +127,8 @@ See [verification](companion/VERIFICATION.md) for reproduced and unrun checks, a
 
 ## Update
 
+For a prebuilt installation, download and run the new installer after stopping the two Garden Gate services. It replaces only unchanged files recorded by the previous prebuilt installer. Restart the background service afterwards only if you had already enabled it.
+
 Update the shell widget:
 
 ```bash
@@ -133,6 +151,14 @@ omarchy plugin remove io.github.tcballard.gardengate
 ```
 
 Removing the widget leaves the companion and its services installed. To remove those too, run `bash companion/scripts/uninstall.sh` from the checkout. Inbox files, encrypted config, keyring entry and recovery copies are retained.
+
+For a **prebuilt** installation, remove the companion using its ownership-aware uninstaller instead:
+
+```bash
+python3 ~/.local/share/gardengate/installer/uninstall.py --uninstall
+```
+
+This refuses to delete modified installed files. The bar plugin is removed separately with the command above. Inbox files, credentials and recovery copies are retained.
 
 ## License
 

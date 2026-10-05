@@ -1,5 +1,22 @@
 # Verification — 1 October 2026
 
+## Prebuilt installer — 5 October 2026
+
+Added an x86_64 Linux test installer containing the compiled companion, exact source Git bundle, services, launcher and an ownership-aware uninstaller. No compiler is required on the XPS. The builder requires a clean committed tree and writes source SHA, toolchain, embedded-file sizes/hashes and a complete installer checksum. Toolchain is pinned to Rust 1.88.0. Built on Ubuntu 24.04; the binary requires glibc 2.39+ and libgcc_s.so.1 (Omarchy runtime packages).
+
+Reproduced: release build and binary `--version`; format and strict Clippy; seven Rust core tests; eight installer ownership tests; bundled-source clone and Git origin/tracking setup; actual embedded installer fresh/repeat install, modified-file refusal, removal and inbox retention. Installer integration uses stubbed desktop commands, a temporary home and, in root-only build sandboxes, a simulated non-root identity. CI runs the same fixture as an ordinary runner user. This does not validate live Omarchy, pacman, systemd, keyring, Apple login or transfers. The two real-rclone integration tests were not rerun for these installer-only changes.
+
+The installer installs missing runtime packages through sudo/pacman; this branch of the flow still needs live Arch testing. It does not authenticate to Apple or enable background downloads. Existing bar plugins are preserved. Modified or untracked companion destinations are refused. The prebuilt workflow creates test artifacts; it does not tag or publish a GitHub release. Original live-acceptance gaps below remain open.
+
+Reproduce from a clean checkout:
+
+```bash
+./tests/run
+python3 scripts/build-installer.py
+bash dist/gardengate-0.0.1-linux-x86_64.run --check
+python3 tests/test_installer_bundle.py dist/gardengate-0.0.1-linux-x86_64.run
+```
+
 Scope: download-only developer preview 0.0.1. Source identity: the Git commit containing this file; no compiled binary is committed. Spec remains proposed broader scope, not an implementation claim.
 
 ## Garden Gate adaptation

@@ -8,6 +8,8 @@ Download files from a selected iCloud Drive folder into an ordinary local inbox 
 
 ## Install on the XPS
 
+For the prebuilt test artifact, run `bash ~/Downloads/gardengate-0.0.1-linux-x86_64.run` as your normal desktop user. No Rust or Cargo is needed. See the [root installation guide](../README.md#installation) for dependencies, safe updates and removal. The source-build instructions below are for developers.
+
 From the repository checkout, open a terminal inside `companion/`:
 
 ```bash
