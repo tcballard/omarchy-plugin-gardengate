@@ -79,6 +79,8 @@ def preflight_files(home, files):
 
 def install_files(home, files):
     previous = preflight_files(home, files)
+    record_path = safe_path(home, RECORD)
+    old = json.loads(record_path.read_text()) if record_path.exists() else {}
     records = {}
     for relative, (data, mode) in files.items():
         atomic_write(safe_path(home, relative), data, mode)
@@ -86,7 +88,8 @@ def install_files(home, files):
     for relative in previous.keys() - files.keys():
         safe_path(home, relative).unlink(missing_ok=True)
     atomic_write(safe_path(home, RECORD), json.dumps({
-        "schema": 1, "source": PAYLOAD.get("source"), "files": records
+        "schema": 1, "source": PAYLOAD.get("source"), "files": records,
+        "plugin_source": old.get("plugin_source", old.get("source"))
     }, indent=2).encode() + b"\n", 0o600)
 
 
@@ -130,7 +133,27 @@ def decode_payload():
     return files
 
 
-def install(home, skip_plugin):
+def check_plugin_upgrade(home, plugin_path):
+    safe_path(home, str(plugin_path.relative_to(home)))
+    if not (plugin_path / ".git").is_dir() or (plugin_path / ".git").is_symlink():
+        raise RuntimeError("Existing plugin is not an ordinary managed checkout; left unchanged.")
+    record_path = safe_path(home, RECORD)
+    old = json.loads(record_path.read_text()) if record_path.exists() else {}
+    previous = old.get("plugin_source") or old.get("source")
+    def git(*args):
+        return run("git", "-C", str(plugin_path), *args, capture_output=True, text=True).stdout.strip()
+    if git("remote", "get-url", "origin") != REPOSITORY:
+        raise RuntimeError("Existing plugin has a different origin; left unchanged.")
+    if git("status", "--porcelain", "--untracked-files=all", "--ignored"):
+        raise RuntimeError("Existing plugin has local changes or extra files; left unchanged.")
+    head = git("rev-parse", "HEAD")
+    if git("branch", "--show-current") != "main" or git("rev-parse", "refs/heads/main") != head:
+        raise RuntimeError("Existing plugin is on a user-selected branch; left unchanged.")
+    if head not in (previous, PAYLOAD["source"]):
+        raise RuntimeError("Existing plugin revision is not owned by this installer; left unchanged.")
+
+
+def install(home, skip_plugin, update_plugin=False):
     payload = decode_payload()
     # Smoke-test the shipped executable before changing the installation.
     with tempfile.TemporaryDirectory(prefix="gardengate-check-") as temp:
@@ -152,6 +175,10 @@ def install(home, skip_plugin):
         ".local/share/gardengate/installer/THIRD-PARTY-NOTICES.md": (payload["notices"], 0o644),
     }
     preflight_files(home, files)
+    plugin_path = home / ".config/omarchy/plugins" / PLUGIN
+    existing_plugin = plugin_path.exists() or plugin_path.is_symlink()
+    if update_plugin and not skip_plugin and existing_plugin:
+        check_plugin_upgrade(home, plugin_path)
     dependencies()
     # Replacing a running executable must not leave the old watcher running.
     for service in ("gardengate.service", "gardengate-pull.service"):
@@ -164,8 +191,7 @@ def install(home, skip_plugin):
     run("systemctl", "--user", "daemon-reload")
     print("Prebuilt companion installed. No Apple login or downloads have been started.", flush=True)
     if not skip_plugin:
-        plugin_path = home / ".config/omarchy/plugins" / PLUGIN
-        if plugin_path.exists() or plugin_path.is_symlink():
+        if existing_plugin and not update_plugin:
             print("Existing bar plugin left unchanged. Use Omarchy's plugin manager to update it.")
         else:
             with tempfile.TemporaryDirectory(prefix="gardengate-plugin-") as temp:
@@ -174,7 +200,13 @@ def install(home, skip_plugin):
                 checkout = Path(temp) / "plugin"
                 run("git", "clone", "--quiet", str(bundle), str(checkout))
                 run("git", "-C", str(checkout), "checkout", "--quiet", "--detach", PAYLOAD["source"])
-                run("omarchy", "plugin", "add", str(checkout), "--enable", "--yes")
+                if existing_plugin:
+                    check_plugin_upgrade(home, plugin_path)
+                    run("omarchy", "plugin", "validate", str(checkout))
+                    run("git", "-C", str(plugin_path), "fetch", "--quiet", "--no-tags", str(bundle), "HEAD")
+                    run("git", "-C", str(plugin_path), "checkout", "--quiet", "-B", "main", PAYLOAD["source"])
+                else:
+                    run("omarchy", "plugin", "add", str(checkout), "--enable", "--yes")
                 installed = run("git", "-C", str(plugin_path), "rev-parse", "HEAD",
                                 capture_output=True, text=True).stdout.strip()
                 if installed != PAYLOAD["source"]:
@@ -183,7 +215,13 @@ def install(home, skip_plugin):
                 run("git", "-C", str(plugin_path), "checkout", "--quiet", "-B", "main")
                 run("git", "-C", str(plugin_path), "config", "branch.main.remote", "origin")
                 run("git", "-C", str(plugin_path), "config", "branch.main.merge", "refs/heads/main")
-    print("Next: ~/.local/bin/gardengate connect")
+                record_path = safe_path(home, RECORD)
+                record = json.loads(record_path.read_text())
+                record["plugin_source"] = PAYLOAD["source"]
+                atomic_write(record_path, json.dumps(record, indent=2).encode() + b"\n", 0o600)
+                if existing_plugin:
+                    run("omarchy-shell", "shell", "rescanPlugins")
+    print("Next: click the gate icon, or run ~/.local/bin/gardengate manage")
     print("Uninstall: python3 ~/.local/share/gardengate/installer/uninstall.py --uninstall")
 
 
@@ -191,6 +229,7 @@ def main():
     parser = argparse.ArgumentParser(description="Garden Gate prebuilt developer-preview installer")
     parser.add_argument("--check", action="store_true", help="Verify embedded payload without installing")
     parser.add_argument("--no-plugin", action="store_true", help="Install only the companion")
+    parser.add_argument("--update-plugin", action="store_true", help="Update an unchanged bar plugin owned by this installer")
     parser.add_argument("--uninstall", action="store_true", help="Remove unchanged managed companion files")
     args = parser.parse_args()
     if args.check:
@@ -207,7 +246,7 @@ def main():
     else:
         if not shutil.which("omarchy") and not args.no_plugin:
             raise RuntimeError("Omarchy is required to install the bar plugin.")
-        install(home, args.no_plugin)
+        install(home, args.no_plugin, args.update_plugin)
 
 
 if __name__ == "__main__":

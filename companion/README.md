@@ -4,11 +4,11 @@
 
 Download files from a selected iCloud Drive folder into an ordinary local inbox on your Linux desktop.
 
-**0.0.1 developer preview: download-only, not the completed spec.** Rust CLI and background watcher; a basic Qt management menu via kdialog. No Python backend. Setup uses rclone's terminal flow. Two-way sync, full management UI, live-tested bar/Perch integration, Reflect app-container compatibility and Photos are deferred. The community badge is an identity label, not official approval.
+**0.0.2 developer preview: download-only, not the completed spec.** Rust companion and background watcher, with guided desktop sign-in and folder selection via kdialog. rclone supplies Apple authentication through its non-interactive configuration protocol; terminal setup remains a troubleshooting option. Two-way sync, live-tested bar/Perch integration, Reflect app-container compatibility and Photos are deferred. The community badge is an identity label, not official approval.
 
 ## Install on the XPS
 
-For the prebuilt test artifact, run `bash ~/Downloads/gardengate-0.0.1-linux-x86_64.run` as your normal desktop user. No Rust or Cargo is needed. See the [root installation guide](../README.md#installation) for dependencies, safe updates and removal. The source-build instructions below are for developers.
+For the prebuilt test artifact, run `bash ~/Downloads/gardengate-0.0.2-linux-x86_64.run` as your normal desktop user. No Rust or Cargo is needed. See the [root installation guide](../README.md#installation) for dependencies, safe updates and removal. The source-build instructions below are for developers.
 
 From the repository checkout, open a terminal inside `companion/`:
 
@@ -20,6 +20,8 @@ bash scripts/install.sh
 This source checkout builds the companion with Cargo. Install Rust/Cargo before running the installer. rclone 1.75.1+ is required; 1.75.1 was tested here. Your desktop Secret Service must be running and unlocked. No credential or service is created/enabled by the installer. Intended target: Omarchy 4 / Hyprland; **live Omarchy versions tested: none**.
 
 ## Connect your iPhone
+
+Click the gate icon or run `~/.local/bin/gardengate manage` for guided setup. Sign into Apple, enter your verification code, browse to your iCloud folder and choose a local destination. Cancelling sign-in retains the previous encrypted connection. Details are in the [root usage guide](../README.md#usage). The commands below are the optional terminal route.
 
 On the iPhone, open **Files → Browse → iCloud Drive**, and create **Omarchy Inbox**. Put a small test document there. For content from another app use **Share → Save to Files**, then choose this folder. This does not synchronise the Apple Notes database, local “On My iPhone” files, or the Photos library automatically.
 
@@ -69,7 +71,7 @@ Open **Garden Gate (Preview)** in the launcher, or run:
 ~/.local/bin/gardengate manage
 ```
 
-The Qt menu offers folder selection, preview, background download, status, pause/resume and open-inbox actions. Apple sign-in instructions lead to the terminal; there is no graphical credential entry yet. The management menu and live systemd/keyring interaction are **NOT RUN on Omarchy**.
+The Qt menu offers graphical Apple sign-in, folder browsing, preview, download, status, pause/resume and open-inbox actions. The new wizard and live systemd/keyring interaction still need XPS validation.
 
 ## File behaviour
 

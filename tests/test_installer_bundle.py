@@ -7,6 +7,7 @@ import sys
 import tempfile
 
 artifact = Path(sys.argv[1]).resolve()
+previous_artifact = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else None
 # Some build sandboxes have only uid 0 and cannot create a second user. In that
 # case execute the exact embedded Python with only geteuid simulated; every
 # destination still lives under the fixture HOME and desktop commands are stubs.
@@ -37,6 +38,10 @@ with tempfile.TemporaryDirectory(prefix="gardengate-install-test-") as temp:
         "systemctl": "#!/bin/sh\ncase \"$*\" in *is-active*) exit 3;; esac\nexit 0\n",
         "omarchy": '''#!/usr/bin/env bash
 set -euo pipefail
+if [[ "$1 $2" == 'plugin validate' ]]; then
+  test -f "$3/BarWidget.qml"
+  exit
+fi
 [[ "$1 $2" == 'plugin add' ]]
 [[ "$4 $5" == '--enable --yes' ]]
 mkdir -p "$HOME/.config/omarchy/plugins"
@@ -45,6 +50,7 @@ git clone --quiet "$3" "$HOME/.config/omarchy/plugins/io.github.tcballard.garden
     }
     for command in ("secret-tool", "kdialog", "xdg-open"):
         scripts[command] = "#!/bin/sh\nexit 0\n"
+    scripts["omarchy-shell"] = "#!/bin/sh\nexit 0\n"
     # A compiler or package install must never be attempted in this fully provisioned fixture.
     for command in ("cargo", "rustc", "rustup", "sudo", "pacman"):
         scripts[command] = "#!/bin/sh\necho 'UNEXPECTED build/package tool' >&2\nexit 99\n"
@@ -55,7 +61,7 @@ git clone --quiet "$3" "$HOME/.config/omarchy/plugins/io.github.tcballard.garden
     env = dict(os.environ, HOME=str(home), PATH=f"{stubs}:{os.environ['PATH']}")
 
     def run(*args, success=True):
-        if simulated_user and ((args[0] == "bash" and args[1] == str(artifact)) or
+        if simulated_user and ((args[0] == "bash" and args[1].endswith(".run")) or
                                (args[0] == "python3" and args[1].endswith("uninstall.py"))):
             wrapper = '''import os, sys
 from pathlib import Path
@@ -73,10 +79,19 @@ with patch.object(os, 'geteuid', return_value=1000):
             raise AssertionError(f"{args}: exit {result.returncode}\n{result.stdout}\n{result.stderr}")
         return result
 
+    if previous_artifact:
+        run("bash", str(previous_artifact))
     run("bash", str(artifact), "--check")
     run("bash", str(artifact))
+    plugin = home / ".config/omarchy/plugins/io.github.tcballard.gardengate"
+    run("bash", str(artifact), "--update-plugin")
+    widget = plugin / "BarWidget.qml"
+    widget_original = widget.read_bytes()
+    widget.write_bytes(widget_original + b"\n// user change\n")
+    assert "local changes" in run("bash", str(artifact), "--update-plugin", success=False).stderr
+    widget.write_bytes(widget_original)
     binary = home / ".local/bin/gardengate"
-    assert "gardengate 0.0.1" in run(str(binary), "--version").stdout
+    assert "gardengate 0.0.2" in run(str(binary), "--version").stdout
     plugin = home / ".config/omarchy/plugins/io.github.tcballard.gardengate"
     assert (plugin / "BarWidget.qml").is_file()
     assert run("git", "-C", str(plugin), "remote", "get-url", "origin").stdout.strip() == (
