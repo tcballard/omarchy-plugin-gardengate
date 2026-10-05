@@ -2,6 +2,8 @@
 
 ## Prebuilt installer — 5 October 2026
 
+XPS testing found the first installer consumed stdin as embedded Python source, causing pacman's confirmation to receive EOF. The launcher now reads source from file descriptor 3 and preserves stdin for child commands. A regression test exercises the exact generated shell launcher and a child confirmation prompt with an explicit `y` response; it must fail with the old launcher and pass with the fixed one. Real Apple/desktop acceptance remains outstanding.
+
 Added an x86_64 Linux test installer containing the compiled companion, exact source Git bundle, services, launcher and an ownership-aware uninstaller. No compiler is required on the XPS. The builder requires a clean committed tree and writes source SHA, toolchain, embedded-file sizes/hashes and a complete installer checksum. Toolchain is pinned to Rust 1.88.0. Built on Ubuntu 24.04; the binary requires glibc 2.39+ and libgcc_s.so.1 (Omarchy runtime packages).
 
 Reproduced: release build and binary `--version`; format and strict Clippy; seven Rust core tests; eight installer ownership tests; bundled-source clone and Git origin/tracking setup; actual embedded installer fresh/repeat install, modified-file refusal, removal and inbox retention. Installer integration uses stubbed desktop commands, a temporary home and, in root-only build sandboxes, a simulated non-root identity. CI runs the same fixture as an ordinary runner user. This does not validate live Omarchy, pacman, systemd, keyring, Apple login or transfers. The two real-rclone integration tests were not rerun for these installer-only changes.

@@ -48,7 +48,8 @@ script = installer_source.replace("PAYLOAD = {}", "PAYLOAD = " + repr(payload), 
 header = '''#!/usr/bin/env bash
 set -euo pipefail
 command -v python3 >/dev/null || { echo 'Python 3 is required (included with Omarchy).' >&2; exit 1; }
-exec python3 - "$@" <<'GARDENGATE_PYTHON'
+# Keep stdin attached to the caller for sudo/pacman confirmation prompts.
+exec python3 /dev/fd/3 "$@" 3<<'GARDENGATE_PYTHON'
 '''
 output.mkdir(parents=True, exist_ok=True)
 target = output / f"gardengate-{version}-linux-x86_64.run"

@@ -12,6 +12,20 @@ artifact = Path(sys.argv[1]).resolve()
 # destination still lives under the fixture HOME and desktop commands are stubs.
 simulated_user = os.geteuid() == 0
 
+# Exercise the actual shell launcher even on root-only hosts. A dependency
+# installer must inherit the caller's stdin, not Python's exhausted source text.
+launcher = artifact.read_text().split("<<'GARDENGATE_PYTHON'\n", 1)[0]
+prompt_probe = launcher + "<<'GARDENGATE_PYTHON'\n" + '''import subprocess, sys
+subprocess.run([sys.executable, '-c',
+               'assert input("Proceed with installation? [Y/n] ") == "y"'], check=True)
+''' + "GARDENGATE_PYTHON\n"
+with tempfile.TemporaryDirectory(prefix="gardengate-stdin-test-") as temp:
+    probe = Path(temp) / "probe.run"
+    probe.write_text(prompt_probe)
+    result = subprocess.run(["bash", str(probe)], input="y\n", capture_output=True, text=True)
+    assert result.returncode == 0, f"Installer swallowed confirmation input: {result.stderr}"
+print("PASS: actual shell launcher preserves stdin for dependency confirmation")
+
 
 with tempfile.TemporaryDirectory(prefix="gardengate-install-test-") as temp:
     home = Path(temp) / "home"
