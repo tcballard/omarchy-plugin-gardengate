@@ -4,9 +4,11 @@
 
 Download files from a selected iCloud Drive folder into an ordinary local inbox on your Linux desktop.
 
-**0.0.1 developer preview: download-only, not the completed spec.** Rust CLI and background watcher; a basic Qt management menu via kdialog. No Python backend. Setup uses rclone's terminal flow. Two-way sync, full management UI, live-tested bar/Perch integration, Reflect app-container compatibility and Photos are deferred. The community badge is an identity label, not official approval.
+**0.0.2 developer preview: download-only, not the completed spec.** Rust companion and background watcher, with guided desktop sign-in and folder selection via kdialog. rclone supplies Apple authentication through its non-interactive configuration protocol; terminal setup remains a troubleshooting option. Two-way sync, live-tested bar/Perch integration, Reflect app-container compatibility and Photos are deferred. The community badge is an identity label, not official approval.
 
 ## Install on the XPS
+
+For the prebuilt test artifact, run `bash ~/Downloads/gardengate-0.0.2-linux-x86_64.run` as your normal desktop user. No Rust or Cargo is needed. See the [root installation guide](../README.md#installation) for dependencies, safe updates and removal. The source-build instructions below are for developers.
 
 From the repository checkout, open a terminal inside `companion/`:
 
@@ -18,6 +20,8 @@ bash scripts/install.sh
 This source checkout builds the companion with Cargo. Install Rust/Cargo before running the installer. rclone 1.75.1+ is required; 1.75.1 was tested here. Your desktop Secret Service must be running and unlocked. No credential or service is created/enabled by the installer. Intended target: Omarchy 4 / Hyprland; **live Omarchy versions tested: none**.
 
 ## Connect your iPhone
+
+Click the gate icon or run `~/.local/bin/gardengate manage` for guided setup. Sign into Apple, enter your verification code, browse to your iCloud folder and choose a local destination. Cancelling sign-in retains the previous encrypted connection. Details are in the [root usage guide](../README.md#usage). The commands below are the optional terminal route.
 
 On the iPhone, open **Files → Browse → iCloud Drive**, and create **Omarchy Inbox**. Put a small test document there. For content from another app use **Share → Save to Files**, then choose this folder. This does not synchronise the Apple Notes database, local “On My iPhone” files, or the Photos library automatically.
 
@@ -53,10 +57,10 @@ The initial destination must be empty. Inspect the preview, then approve the dow
 ~/.local/bin/gardengate open
 ```
 
-Your test document should now be in the XPS inbox. That first successful transfer approves future background downloads. Enable the watcher only after this succeeds:
+Your test document should now be in the XPS inbox. That first successful transfer approves future background downloads. Choose **Enable or resume background downloads** in management, or use the equivalent command after this succeeds:
 
 ```bash
-systemctl --user enable --now gardengate.service
+~/.local/bin/gardengate background on
 ```
 
 The preview checks at approximately 60-second intervals, measured after the previous cycle; failures back off. Apple propagation can take longer. It stages the whole selected folder each cycle, with a 512 MiB transfer cap. **Use a small test folder, not your entire Drive.** Optimised incremental transfer is future work.
@@ -67,7 +71,7 @@ Open **Garden Gate (Preview)** in the launcher, or run:
 ~/.local/bin/gardengate manage
 ```
 
-The Qt menu offers folder selection, preview, background download, status, pause/resume and open-inbox actions. Apple sign-in instructions lead to the terminal; there is no graphical credential entry yet. The management menu and live systemd/keyring interaction are **NOT RUN on Omarchy**.
+The Qt menu offers graphical Apple sign-in, folder browsing, preview, download, readable status, background-service controls, and actions to open the inbox or preserved conflict copies. Enabling background downloads starts the service and enables it at sign-in; turning them off stops and disables it. A failed start is reported and retains the previous pause setting. The wizard and live systemd/keyring interaction still need XPS validation.
 
 ## File behaviour
 
@@ -75,19 +79,20 @@ The Qt menu offers folder selection, preview, background download, status, pause
 - Cloud deletion leaves downloaded local files intact. Rename appears as a new download; the previous local path remains.
 - Changed cloud content updates a previously downloaded local file if it still matches the recorded downloaded version. The replaced version is backed up.
 - Local edits stay local. If both sides differ, the cloud version is saved as a separate recovery copy and status becomes `needs-review`.
-- `status` shows preserved conflict-copy paths. Open/copy these manually; an integrated conflict resolver is deferred. To converge manually, copy the preserved cloud contents into the local file, or keep the local edit and accept the unresolved record for now.
+- `status` shows preserved conflict-copy paths, saved download results and actual service state without contacting Apple. **Open recovery copies** opens the recovery folder; an integrated conflict resolver is deferred. To converge manually, copy the preserved cloud contents into the local file, or keep the local edit and accept the unresolved record for now.
 - `.reflect/`, `.git/` and `.DS_Store` are excluded. Symlinks/special files and incoming case collisions are rejected.
 - Local files remain usable offline; failure never reconciles a partially downloaded stage.
 - Backups/conflict copies have no automatic cleanup in this preview. Monitor disk usage yourself.
 
 ```bash
 ~/.local/bin/gardengate status
+~/.local/bin/gardengate background off
 ~/.local/bin/gardengate pause
 ~/.local/bin/gardengate resume
 systemctl --user status gardengate.service
 ```
 
-A pause request waits for an active transfer's operation lock; stop the service to interrupt it immediately. Signal handling kills/reaps an active rclone child and retains local files. No realtime collaboration guarantee: a file editor writing at the exact replacement boundary can still race with reconciliation. Test with disposable data and avoid editing an inbox file during its download.
+The legacy `pause`/`resume` commands only change the pause flag for an already-enabled watcher; they do not start it. They refuse while another operation holds the lock. Use **Turn off background downloads** or `background off` to stop the watcher even during a transfer; manual download jobs are independent. Signal handling kills/reaps an active rclone child and retains local files. No realtime collaboration guarantee: a file editor writing at the exact replacement boundary can still race with reconciliation. Test with disposable data and avoid editing an inbox file during its download.
 
 ## Reconnect and remove
 

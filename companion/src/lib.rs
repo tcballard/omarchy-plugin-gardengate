@@ -87,9 +87,13 @@ impl Paths {
         Ok(f)
     }
     pub fn profile(&self) -> Result<Profile> {
-        let p: Profile = read_json(&self.config.join("profile.json"))?;
-        if p.schema != 1 {
-            bail!("Unsupported profile schema")
+        self.optional_profile()?
+            .context("Choose an iCloud folder first")
+    }
+    pub fn optional_profile(&self) -> Result<Option<Profile>> {
+        let p: Option<Profile> = read_optional_json(&self.config.join("profile.json"))?;
+        if p.as_ref().is_some_and(|p| p.schema != 1) {
+            bail!("Unsupported profile schema; existing configuration is unchanged")
         }
         Ok(p)
     }
@@ -188,6 +192,19 @@ pub fn atomic_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 pub fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
     reject_symlinks(path)?;
     Ok(serde_json::from_reader(File::open(path)?)?)
+}
+pub fn read_optional_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Option<T>> {
+    reject_symlinks(path)?;
+    match File::open(path) {
+        Ok(file) => Ok(Some(serde_json::from_reader(file).with_context(|| {
+            format!(
+                "Could not read {}; existing data is unchanged",
+                path.display()
+            )
+        })?)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.into()),
+    }
 }
 pub fn hash(path: &Path) -> Result<String> {
     let mut f = OpenOptions::new()

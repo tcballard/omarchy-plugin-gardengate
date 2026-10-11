@@ -1,4 +1,6 @@
 use anyhow::{bail, Context, Result};
+mod management;
+mod setup;
 use gardengate::*;
 use std::{
     fs,
@@ -27,18 +29,21 @@ fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cmd = args.first().map(String::as_str).unwrap_or("help");
     if cmd == "--version" {
-        println!("gardengate 0.0.1 (download-only developer preview)");
+        println!("gardengate 0.0.2 (download-only developer preview)");
         return Ok(());
     }
     if cmd == "help" || cmd == "--help" {
-        println!("Garden Gate for Omarchy 0.0.1 — developer preview\n\nDownload-only: iCloud Drive → local inbox. No cloud writes or deletions.\n\n  manage              Open the basic Qt management menu\n  connect             Configure encrypted account connection (interactive)\n  folders [path]      List accessible iCloud Drive folders\n  add FOLDER LOCAL    Select one folder and an empty absolute local directory\n  plan                Show cloud folder size and current local contents\n  pull --apply        Download now and approve background downloading\n  watch               Download every 60s; used by systemd\n  pause | resume      Control background downloads\n  status              Print JSON state and preserved conflict-copy paths\n  open                Open the local folder\n\nCreate 'Omarchy Inbox' in iPhone Files → iCloud Drive, then use that folder.\nSetup currently uses rclone's terminal UI. Full management UI, two-way sync\nand Reflect compatibility are not implemented in this preview.");
+        println!("Garden Gate for Omarchy 0.0.2 — developer preview\n\nDownload-only: iCloud Drive → local inbox. No cloud writes or deletions.\n\n  setup               Connect Apple and choose a folder with desktop dialogs\n  manage              Open the Garden Gate management menu\n  connect             Configure encrypted account connection (interactive)\n  folders [path]      List accessible iCloud Drive folders\n  add FOLDER LOCAL    Select one folder and an empty absolute local directory\n  plan                Show cloud folder size and current local contents\n  pull --apply        Download now and approve background downloading\n  watch               Download every 60s; used by systemd\n  background on|off   Enable/resume or stop background downloads\n  pause | resume      Pause/resume an already-enabled watcher\n  status              Print JSON state and preserved conflict-copy paths\n  open                Open the local folder\n  recovery            Open preserved competing cloud copies\n\nCreate 'Omarchy Inbox' in iPhone Files → iCloud Drive, then use that folder.\nSetup uses desktop dialogs; connect offers terminal troubleshooting. Two-way sync\nand Reflect compatibility are not implemented in this preview.");
         return Ok(());
     }
     let paths = Paths::discover()?;
     paths.init()?;
     match cmd {
         "connect" => connect(&paths),
-        "manage" => manage(&paths),
+        "setup" => setup::wizard(&paths).map(|_| ()),
+        "manage" => management::manage(&paths).inspect_err(|error| {
+            let _ = dialog(&["--error", &error.to_string()]);
+        }),
         "folders" => {
             let _lock = paths.lock()?;
             let r = Rclone::managed(&paths)?;
@@ -142,27 +147,28 @@ fn run() -> Result<()> {
             Ok(())
         }
         "status" => {
-            let p = if paths.config.join("profile.json").exists() {
-                Some(paths.profile()?)
-            } else {
-                None
-            };
-            let report = if paths.state.join("status.json").exists() {
-                Some(read_json::<Report>(&paths.state.join("status.json"))?)
-            } else {
-                None
-            };
-            let ledger = if paths.state.join("ledger.json").exists() {
-                Some(read_json::<Ledger>(&paths.state.join("ledger.json"))?)
-            } else {
-                None
-            };
             println!(
                 "{}",
-                serde_json::to_string_pretty(
-                    &serde_json::json!({"schema":1,"mode":"download-only","profile":p,"last_check":report,"conflict_copies":ledger.map(|l|l.conflicts)})
-                )?
+                serde_json::to_string_pretty(&management::Snapshot::read(&paths)?)?
             );
+            Ok(())
+        }
+        "background" => match args.get(1).map(String::as_str) {
+            Some("on") => management::background(&paths, true),
+            Some("off") => management::background(&paths, false),
+            _ => bail!("Usage: gardengate background on|off"),
+        },
+        "recovery" => {
+            // Open the owned parent, never a path supplied by a conflict record.
+            let directory = paths.state.join("conflicts");
+            reject_symlinks(&directory)?;
+            if !directory.is_dir() {
+                println!("No competing cloud copies have been recorded.");
+                return Ok(());
+            }
+            if !Command::new("xdg-open").arg(directory).status()?.success() {
+                bail!("Could not open recovery copies");
+            }
             Ok(())
         }
         "open" => {
@@ -179,6 +185,21 @@ fn run() -> Result<()> {
 }
 fn connect(paths: &Paths) -> Result<()> {
     let _lock = paths.lock()?;
+    prepare_connection(paths)?;
+    println!("Configure a remote named icloud, type iclouddrive, service drive.\nUse your Apple Account password and complete 2FA on your iPhone.\nDo not remove configuration encryption. This is an unofficial connection.\nIn rclone select n to create, or e to edit the existing icloud remote.\n");
+    let r = Rclone::managed(paths)?;
+    if !r.command().arg("config").status()?.success() {
+        bail!("Account setup did not finish")
+    };
+    paths.encrypted_config()?;
+    r.run(
+        &["lsjson", "icloud:", "--dirs-only"],
+        &paths.state.join("listing.tmp"),
+    )?;
+    println!("Connection verified. Open Garden Gate to choose your iCloud folder.");
+    Ok(())
+}
+fn prepare_connection(paths: &Paths) -> Result<()> {
     let config = paths.config.join("rclone.conf");
     reject_symlinks(&config)?;
     let password_command = "secret-tool lookup application gardengate";
@@ -223,42 +244,31 @@ fn connect(paths: &Paths) -> Result<()> {
         }
     }
     paths.encrypted_config()?;
-    println!("Configure a remote named icloud, type iclouddrive, service drive.\nUse your Apple Account password and complete 2FA on your iPhone.\nDo not remove configuration encryption. This is an unofficial connection.\nIn rclone select n to create, or e to edit the existing icloud remote.\n");
-    let r = Rclone::managed(paths)?;
-    if !r.command().arg("config").status()?.success() {
-        bail!("Account setup did not finish")
-    };
-    paths.encrypted_config()?;
-    r.run(
-        &["lsjson", "icloud:", "--dirs-only"],
-        &paths.state.join("listing.tmp"),
-    )?;
-    println!("Connection verified. Create Omarchy Inbox in iPhone Files → iCloud Drive, then select it with add.");
     Ok(())
 }
 fn pull(paths: &Paths, p: &Profile) -> Result<Report> {
-    validate_folder(&p.remote_folder)?;
-    reject_symlinks(&p.local)?;
-    let ledger_path = paths.state.join("ledger.json");
-    let mut ledger = if ledger_path.exists() {
-        read_json::<Ledger>(&ledger_path)?
-    } else {
-        Ledger {
-            schema: 1,
-            ..Default::default()
-        }
-    };
-    if ledger.schema != 1 {
-        bail!("Unsupported ledger schema; refusing to discard state")
-    }
     let stage = paths.state.join("staging");
-    if stage.exists() {
-        reject_symlinks(&stage)?;
-        fs::remove_dir_all(&stage)?
-    };
-    private_dir(&stage)?;
-    let r = Rclone::managed(paths)?;
     let result: Result<Report> = (|| {
+        validate_folder(&p.remote_folder)?;
+        reject_symlinks(&p.local)?;
+        let ledger_path = paths.state.join("ledger.json");
+        let mut ledger = if ledger_path.exists() {
+            read_json::<Ledger>(&ledger_path)?
+        } else {
+            Ledger {
+                schema: 1,
+                ..Default::default()
+            }
+        };
+        if ledger.schema != 1 {
+            bail!("Unsupported ledger schema; refusing to discard state")
+        }
+        if stage.exists() {
+            reject_symlinks(&stage)?;
+            fs::remove_dir_all(&stage)?
+        };
+        private_dir(&stage)?;
+        let r = Rclone::managed(paths)?;
         r.download(
             &format!("icloud:{}", p.remote_folder),
             &stage,
@@ -322,117 +332,32 @@ fn watch(paths: &Paths) -> Result<()> {
 }
 
 fn dialog(args: &[&str]) -> Result<Option<String>> {
-    let output = Command::new("kdialog")
+    let mut child = Command::new("kdialog")
+        .args(["--title", "Garden Gate", "--geometry", "560x380"])
         .args(args)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
         .context("Install kdialog for the management window")?;
+    setup::float_dialog(&mut child);
+    let output = child.wait_with_output()?;
     if !output.status.success() {
-        return Ok(None);
+        if output.status.code() == Some(1) {
+            return Ok(None);
+        }
+        bail!("Garden Gate could not open its dialog. Check your desktop session.");
     }
-    Ok(Some(String::from_utf8(output.stdout)?.trim().to_string()))
-}
-fn manage(paths: &Paths) -> Result<()> {
-    loop {
-        let state = if let Ok(p) = paths.profile() {
-            if p.paused {
-                "Paused"
-            } else if let Ok(r) = read_json::<Report>(&paths.state.join("status.json")) {
-                if r.conflicts > 0 {
-                    "Needs review"
-                } else {
-                    "Ready — see last check"
-                }
-            } else {
-                "Folder selected"
-            }
-        } else {
-            "Setup required"
-        };
-        let title =
-            format!("Garden Gate · developer preview\n{state}\nDownload-only: iPhone → XPS");
-        let Some(action) = dialog(&[
-            "--title",
-            "Garden Gate",
-            "--menu",
-            &title,
-            "setup",
-            "Connect Apple Account (terminal instructions)",
-            "add",
-            "Choose iCloud folder",
-            "preview",
-            "Preview download",
-            "pull",
-            "Download now",
-            "status",
-            "Status and conflict copies",
-            "pause",
-            "Pause background downloads",
-            "resume",
-            "Resume background downloads",
-            "open",
-            "Open local inbox",
-        ])?
-        else {
-            break;
-        };
-        if action == "setup" {
-            dialog(&["--msgbox","Open a terminal and run:\ngardengate connect\n\nCreate remote: icloud; type: iclouddrive; service: drive.\nEnter your Apple Account password and complete 2FA.\nThen create Omarchy Inbox in iPhone Files → iCloud Drive.\n\nCredentials stay in an encrypted config unlocked through your desktop keyring."])?;
-            continue;
-        }
-        if action == "add" {
-            let Some(folder) = dialog(&[
-                "--inputbox",
-                "iCloud folder name (create it in iPhone Files first)",
-                "Omarchy Inbox",
-            ])?
-            else {
-                continue;
-            };
-            let home = std::env::var("HOME")?;
-            let Some(local) = dialog(&[
-                "--getexistingdirectory",
-                &home,
-                "--title",
-                "Choose an EMPTY local folder inside your home",
-            ])?
-            else {
-                continue;
-            };
-            show_command(&["add", &folder, &local])?;
-            continue;
-        }
-        if action == "pull" {
-            if dialog(&["--yesno","Download this folder now? Cloud files are copied locally, changed local files are preserved, and competing cloud copies go to recovery storage. No cloud writes or propagated deletions. This also approves future background downloads."] )?.is_none(){continue}
-            let output = Command::new("systemctl")
-                .args(["--user", "start", "--no-block", "gardengate-pull.service"])
-                .output()?;
-            if output.status.success() {
-                dialog(&[
-                    "--msgbox",
-                    "Download queued. Use Status to see completion or errors.",
-                ])?;
-            } else {
-                dialog(&[
-                    "--error",
-                    "Could not queue download. In a terminal run: gardengate pull --apply",
-                ])?;
-            }
-            continue;
-        }
-        let command = match action.as_str() {
-            "preview" => "plan",
-            "status" => "status",
-            "pause" => "pause",
-            "resume" => "resume",
-            "open" => "open",
-            _ => continue,
-        };
-        show_command(&[command])?;
-    }
-    Ok(())
+    Ok(Some(
+        String::from_utf8(output.stdout)?
+            .trim_end_matches(['\r', '\n'])
+            .to_string(),
+    ))
 }
 fn show_command(args: &[&str]) -> Result<()> {
     let out = Command::new(std::env::current_exe()?).args(args).output()?;
+    if out.status.success() && out.stdout.is_empty() {
+        return Ok(());
+    }
     let text = if out.status.success() {
         String::from_utf8_lossy(&out.stdout)
     } else {
