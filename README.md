@@ -12,7 +12,8 @@ Bring files from your iPhone's iCloud Drive to an ordinary folder on your Omarch
 - Connect Apple and complete verification in desktop dialogs, then browse iCloud folders.
 - Download one selected iCloud Drive folder into a local inbox.
 - Preserve local edits, replaced versions and competing cloud copies.
-- Pause/resume optional background downloads and open the inbox.
+- Enable or stop optional background downloads directly from management.
+- Read download errors and service status, and open the inbox or preserved conflict copies.
 
 Two-way sync, Apple Notes/Photos, Reflect container support, live bar status and conflict-resolution UI are deferred.
 
@@ -88,13 +89,15 @@ In rclone choose a new remote named `icloud`, storage `iclouddrive`, service `dr
 
 ### Background downloads
 
-After checking the first transfer, optionally enable background downloads:
+After checking the first transfer, choose **Enable or resume background downloads** in the Garden Gate menu. This starts the watcher and enables it when you next sign in. **Turn off background downloads** stops the watcher and disables that automatic start; manual downloads remain available. No extra terminal step is needed. The equivalent optional command is:
 
 ```bash
-systemctl --user enable --now gardengate.service
+~/.local/bin/gardengate background on
 ```
 
-The first successful manual download approves background transfers. The watcher checks around 60 seconds after each cycle and backs off on errors. This preview stages the whole selected folder each cycle, with a 512 MiB cap. Start with disposable files in a small folder.
+The first successful manual download approves background transfers; enabling them before that is refused. The watcher checks around 60 seconds after each cycle and backs off on errors. This preview stages the whole selected folder each cycle, with a 512 MiB cap. Start with disposable files in a small folder.
+
+**Status and last download** shows saved transfer results, any download error and the actual background service state. Opening status does not contact Apple. **Open recovery copies** opens preserved competing cloud files for inspection; conflict resolution remains manual. The menu refreshes when an action returns, and status refreshes when opened.
 
 [Companion instructions](companion/README.md) explain account setup, conflicts, pause/resume, limitations and removal.
 

@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+mod management;
 mod setup;
 use gardengate::*;
 use std::{
@@ -32,7 +33,7 @@ fn run() -> Result<()> {
         return Ok(());
     }
     if cmd == "help" || cmd == "--help" {
-        println!("Garden Gate for Omarchy 0.0.2 — developer preview\n\nDownload-only: iCloud Drive → local inbox. No cloud writes or deletions.\n\n  setup               Connect Apple and choose a folder with desktop dialogs\n  manage              Open the Garden Gate management menu\n  connect             Configure encrypted account connection (interactive)\n  folders [path]      List accessible iCloud Drive folders\n  add FOLDER LOCAL    Select one folder and an empty absolute local directory\n  plan                Show cloud folder size and current local contents\n  pull --apply        Download now and approve background downloading\n  watch               Download every 60s; used by systemd\n  pause | resume      Control background downloads\n  status              Print JSON state and preserved conflict-copy paths\n  open                Open the local folder\n\nCreate 'Omarchy Inbox' in iPhone Files → iCloud Drive, then use that folder.\nSetup currently uses rclone's terminal UI. Full management UI, two-way sync\nand Reflect compatibility are not implemented in this preview.");
+        println!("Garden Gate for Omarchy 0.0.2 — developer preview\n\nDownload-only: iCloud Drive → local inbox. No cloud writes or deletions.\n\n  setup               Connect Apple and choose a folder with desktop dialogs\n  manage              Open the Garden Gate management menu\n  connect             Configure encrypted account connection (interactive)\n  folders [path]      List accessible iCloud Drive folders\n  add FOLDER LOCAL    Select one folder and an empty absolute local directory\n  plan                Show cloud folder size and current local contents\n  pull --apply        Download now and approve background downloading\n  watch               Download every 60s; used by systemd\n  background on|off   Enable/resume or stop background downloads\n  pause | resume      Pause/resume an already-enabled watcher\n  status              Print JSON state and preserved conflict-copy paths\n  open                Open the local folder\n  recovery            Open preserved competing cloud copies\n\nCreate 'Omarchy Inbox' in iPhone Files → iCloud Drive, then use that folder.\nSetup uses desktop dialogs; connect offers terminal troubleshooting. Two-way sync\nand Reflect compatibility are not implemented in this preview.");
         return Ok(());
     }
     let paths = Paths::discover()?;
@@ -40,7 +41,9 @@ fn run() -> Result<()> {
     match cmd {
         "connect" => connect(&paths),
         "setup" => setup::wizard(&paths).map(|_| ()),
-        "manage" => manage(&paths),
+        "manage" => management::manage(&paths).inspect_err(|error| {
+            let _ = dialog(&["--error", &error.to_string()]);
+        }),
         "folders" => {
             let _lock = paths.lock()?;
             let r = Rclone::managed(&paths)?;
@@ -144,27 +147,28 @@ fn run() -> Result<()> {
             Ok(())
         }
         "status" => {
-            let p = if paths.config.join("profile.json").exists() {
-                Some(paths.profile()?)
-            } else {
-                None
-            };
-            let report = if paths.state.join("status.json").exists() {
-                Some(read_json::<Report>(&paths.state.join("status.json"))?)
-            } else {
-                None
-            };
-            let ledger = if paths.state.join("ledger.json").exists() {
-                Some(read_json::<Ledger>(&paths.state.join("ledger.json"))?)
-            } else {
-                None
-            };
             println!(
                 "{}",
-                serde_json::to_string_pretty(
-                    &serde_json::json!({"schema":1,"mode":"download-only","profile":p,"last_check":report,"conflict_copies":ledger.map(|l|l.conflicts)})
-                )?
+                serde_json::to_string_pretty(&management::Snapshot::read(&paths)?)?
             );
+            Ok(())
+        }
+        "background" => match args.get(1).map(String::as_str) {
+            Some("on") => management::background(&paths, true),
+            Some("off") => management::background(&paths, false),
+            _ => bail!("Usage: gardengate background on|off"),
+        },
+        "recovery" => {
+            // Open the owned parent, never a path supplied by a conflict record.
+            let directory = paths.state.join("conflicts");
+            reject_symlinks(&directory)?;
+            if !directory.is_dir() {
+                println!("No competing cloud copies have been recorded.");
+                return Ok(());
+            }
+            if !Command::new("xdg-open").arg(directory).status()?.success() {
+                bail!("Could not open recovery copies");
+            }
             Ok(())
         }
         "open" => {
@@ -243,28 +247,28 @@ fn prepare_connection(paths: &Paths) -> Result<()> {
     Ok(())
 }
 fn pull(paths: &Paths, p: &Profile) -> Result<Report> {
-    validate_folder(&p.remote_folder)?;
-    reject_symlinks(&p.local)?;
-    let ledger_path = paths.state.join("ledger.json");
-    let mut ledger = if ledger_path.exists() {
-        read_json::<Ledger>(&ledger_path)?
-    } else {
-        Ledger {
-            schema: 1,
-            ..Default::default()
-        }
-    };
-    if ledger.schema != 1 {
-        bail!("Unsupported ledger schema; refusing to discard state")
-    }
     let stage = paths.state.join("staging");
-    if stage.exists() {
-        reject_symlinks(&stage)?;
-        fs::remove_dir_all(&stage)?
-    };
-    private_dir(&stage)?;
-    let r = Rclone::managed(paths)?;
     let result: Result<Report> = (|| {
+        validate_folder(&p.remote_folder)?;
+        reject_symlinks(&p.local)?;
+        let ledger_path = paths.state.join("ledger.json");
+        let mut ledger = if ledger_path.exists() {
+            read_json::<Ledger>(&ledger_path)?
+        } else {
+            Ledger {
+                schema: 1,
+                ..Default::default()
+            }
+        };
+        if ledger.schema != 1 {
+            bail!("Unsupported ledger schema; refusing to discard state")
+        }
+        if stage.exists() {
+            reject_symlinks(&stage)?;
+            fs::remove_dir_all(&stage)?
+        };
+        private_dir(&stage)?;
+        let r = Rclone::managed(paths)?;
         r.download(
             &format!("icloud:{}", p.remote_folder),
             &stage,
@@ -349,104 +353,11 @@ fn dialog(args: &[&str]) -> Result<Option<String>> {
             .to_string(),
     ))
 }
-fn manage(paths: &Paths) -> Result<()> {
-    if paths.profile().is_err() {
-        match setup::wizard(paths) {
-            Ok(true) => (),
-            Ok(false) => return Ok(()),
-            Err(error) => {
-                dialog(&["--error", &error.to_string()])?;
-                return Ok(());
-            }
-        }
-    }
-    loop {
-        let state = if let Ok(p) = paths.profile() {
-            if p.paused {
-                "Paused"
-            } else if let Ok(r) = read_json::<Report>(&paths.state.join("status.json")) {
-                if r.conflicts > 0 {
-                    "Needs review"
-                } else {
-                    "Ready — see last check"
-                }
-            } else {
-                "Folder selected"
-            }
-        } else {
-            "Setup required"
-        };
-        let title =
-            format!("Garden Gate · developer preview\n{state}\nDownload-only: iPhone → XPS");
-        let Some(action) = dialog(&[
-            "--title",
-            "Garden Gate",
-            "--menu",
-            &title,
-            "setup",
-            "Connect or reconnect Apple Account",
-            "add",
-            "Choose iCloud folder",
-            "preview",
-            "Preview download",
-            "pull",
-            "Download now",
-            "status",
-            "Status and conflict copies",
-            "pause",
-            "Pause background downloads",
-            "resume",
-            "Resume background downloads",
-            "open",
-            "Open local inbox",
-        ])?
-        else {
-            break;
-        };
-        if action == "setup" {
-            if let Err(error) = setup::connect_gui(paths) {
-                dialog(&["--error", &error.to_string()])?;
-            }
-            continue;
-        }
-        if action == "add" {
-            if let Err(error) = setup::choose_folder(paths) {
-                dialog(&["--error", &error.to_string()])?;
-            }
-            continue;
-        }
-        if action == "pull" {
-            if dialog(&["--yesno","Download this folder now? Cloud files are copied locally, changed local files are preserved, and competing cloud copies go to recovery storage. No cloud writes or propagated deletions. This also approves future background downloads."] )?.is_none(){continue}
-            let output = Command::new("systemctl")
-                .args(["--user", "start", "--no-block", "gardengate-pull.service"])
-                .output()?;
-            if output.status.success() {
-                dialog(&[
-                    "--msgbox",
-                    "Download queued. Use Status to see completion or errors.",
-                ])?;
-            } else {
-                dialog(&[
-                    "--error",
-                    "Could not queue download. In a terminal run: gardengate pull --apply",
-                ])?;
-            }
-            continue;
-        }
-        let command = match action.as_str() {
-            "preview" => "plan",
-            "status" => "status",
-            "pause" => "pause",
-            "resume" => "resume",
-            "open" => "open",
-            _ => continue,
-        };
-        show_command(&[command])?;
-    }
-    Ok(())
-}
 fn show_command(args: &[&str]) -> Result<()> {
     let out = Command::new(std::env::current_exe()?).args(args).output()?;
+    if out.status.success() && out.stdout.is_empty() {
+        return Ok(());
+    }
     let text = if out.status.success() {
         String::from_utf8_lossy(&out.stdout)
     } else {

@@ -19,3 +19,9 @@ The bar uses a small Canvas gate instead of a font glyph, so theme changes and b
 Evidence: Rust/provider adapter tests, graphical setup fixtures (including cancellation and passwords containing spaces), real rclone 1.75.1 question negotiation up to password entry without contacting Apple, and installer upgrade fixtures. Gate rendering, focus, sizing and genuine Apple verification still need live XPS acceptance.
 
 Deferred: status service/bar polling, hosted panel, two-way sync, Reflect visibility, Photos, Perch integration, incremental transfer and recovery pruning. Original proposed broader scope remains in companion/docs/SPEC.md.
+
+## 0.0.2 continuation — management and background downloads, 11 October 2026
+
+The open prebuilt-installer branch still displayed failed downloads as “Ready” and its resume action did not start the watcher. Management now presents saved transfer results and actual systemd state, offers explicit enable/stop controls, and opens preserved conflict copies. Background downloads still require a successful first manual download. Status is local-only; the bar remains a static launcher.
+
+Missing profile state is distinguished from invalid or unsupported saved state, which now raises an error without reopening setup. Failures during transfer preparation also replace stale success reports. New behavior lives in a focused Rust management module and five compiled-companion regression fixtures; no new UI framework or runtime dependency is introduced. Live Apple, keyring, service and window acceptance remains outstanding.

@@ -1,5 +1,24 @@
 # Verification — 1 October 2026
 
+## Management and background downloads — 11 October 2026
+
+Continued the open 0.0.2 prebuilt-installer branch. Management now shows download errors, saved results and actual service state, controls watcher enablement without a terminal, and opens preserved conflict copies. Invalid saved profiles stop with an error rather than restarting setup; transfer preparation errors replace stale success reports.
+
+Reproduced on the Linux build host with Rust 1.88.0: portable plugin validation and all eight installer ownership checks; formatting and strict Clippy; seven core tests, two setup unit tests and five new compiled-companion management regressions; release build; the existing compiled graphical-onboarding fixture. The new fixtures cover failed-download presentation, local-only status, the first-transfer approval gate, service start/stop arguments, failed-start pause restoration, stopping while the operation lock is held, active/paused/conflict/unavailable states, malformed/newer-profile preservation and early transfer failure reporting. Desktop commands and the provider are stubs; no credentials or live account are used.
+
+```bash
+./tests/run
+cd companion
+cargo fmt --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
+cargo build --locked --release
+cd ..
+python3 tests/test_desktop_setup.py companion/target/release/gardengate
+```
+
+The two opt-in real-rclone transport tests were not rerun: the transfer adapter is unchanged. Live Apple sign-in, phone-to-XPS transfers, Secret Service, systemd activation/cancellation, dialog layout and the gate widget still need XPS acceptance. The prebuilt workflow rebuilds the installer from the committed candidate and checks its checksum, lifecycle and onboarding fixture; consult that exact commit's Actions result for CI evidence.
+
 ## Graphical setup and gate widget — 5 October 2026, preview 0.0.2
 
 The bar now draws a theme-coloured gate. First use opens graphical Apple Account, password and verification-code prompts, followed by a cloud-folder browser and local destination prompt. Download approval remains separate. Dialogs request compact floating placement for their own PID using current Hyprland dispatches with a legacy fallback. Existing CLI commands remain available.

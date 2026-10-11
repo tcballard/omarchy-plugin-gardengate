@@ -304,7 +304,7 @@ pub fn connect_gui(paths: &Paths) -> Result<bool> {
 }
 
 pub fn choose_folder(paths: &Paths) -> Result<bool> {
-    if paths.profile().is_ok() {
+    if paths.optional_profile()?.is_some() {
         dialog(&["--msgbox", "An inbox is already configured. Use Open local inbox to view it. This preview supports one folder."])?;
         return Ok(true);
     }
