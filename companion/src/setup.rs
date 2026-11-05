@@ -261,7 +261,7 @@ fn answer_question(response: &Value) -> Result<Option<String>> {
 
 pub fn connect_gui(paths: &Paths) -> Result<bool> {
     if dialog(&["--yes-label", "Continue", "--no-label", "Cancel", "--yesno",
-        "Connect iCloud Drive\n\nHave your iPhone ready to approve Apple's sign-in request. Garden Gate only downloads files; it never uploads or deletes from iCloud.\n\nThe connection uses rclone and your desktop keyring."])?.is_none() { return Ok(false); }
+        "Connect iCloud Drive\n\nHave your iPhone ready to approve Apple's sign-in request. Garden Gate starts in download-only mode. Two-way sync is a separate opt-in setting.\n\nThe connection uses rclone and your desktop keyring."])?.is_none() { return Ok(false); }
     let _lock = paths.lock()?;
     prepare_connection(paths)?;
     let current = paths.encrypted_config()?;

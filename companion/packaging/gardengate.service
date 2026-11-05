@@ -1,5 +1,5 @@
 [Unit]
-Description=Garden Gate background downloads (developer preview)
+Description=Garden Gate background transfers (developer preview)
 
 [Service]
 Type=simple

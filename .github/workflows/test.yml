@@ -14,3 +14,11 @@ jobs:
       - run: ./tests/run
       - run: cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked && cargo build --locked --release
         working-directory: companion
+      - name: Install checksum-pinned rclone for transport tests
+        run: |
+          curl --fail --location --retry 3 https://downloads.rclone.org/v1.75.1/rclone-v1.75.1-linux-amd64.zip -o "$RUNNER_TEMP/rclone.zip"
+          echo "982b5aa772841168f8e380f139e9e787b2a105403e32b94da8676a0e1c0a13ab  $RUNNER_TEMP/rclone.zip" | sha256sum --check
+          unzip -q "$RUNNER_TEMP/rclone.zip" -d "$RUNNER_TEMP/rclone"
+      - name: Exercise real two-way transfers and recovery
+        working-directory: companion
+        run: RCLONE_TEST_BIN="$RUNNER_TEMP/rclone/rclone-v1.75.1-linux-amd64/rclone" cargo test --locked --test transport --test two_way -- --include-ignored

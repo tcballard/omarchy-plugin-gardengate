@@ -25,3 +25,9 @@ Deferred: status service/bar polling, hosted panel, two-way sync, Reflect visibi
 The open prebuilt-installer branch still displayed failed downloads as “Ready” and its resume action did not start the watcher. Management now presents saved transfer results and actual systemd state, offers explicit enable/stop controls, and opens preserved conflict copies. Background downloads still require a successful first manual download. Status is local-only; the bar remains a static launcher.
 
 Missing profile state is distinguished from invalid or unsupported saved state, which now raises an error without reopening setup. Failures during transfer preparation also replace stale success reports. New behavior lives in a focused Rust management module and five compiled-companion regression fixtures; no new UI framework or runtime dependency is introduced. Live Apple, keyring, service and window acceptance remains outstanding.
+
+## Two-way development — 5 November 2026
+
+Added an explicit download-only/two-way handoff in the companion and management submenu. Two-way work uses rclone bisync 1.75.1, preserves numbered conflicts, backs up replaced/deleted files outside the roots, binds both folders with an access marker and stops after an interrupted mutation. Initialization and explicit recovery refuse divergent same-name content. Recovery retains old history and may restore deletions by copying the union. The widget remains a static launcher.
+
+The implementation and disposable real-rclone tests do not establish live iCloud acceptance. See companion/VERIFICATION.md and the root two-way usage guide for evidence and limitations.

@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 mod management;
 mod setup;
+use gardengate::two_way::{Action, Engine};
 use gardengate::*;
 use std::{
     fs,
@@ -29,11 +30,37 @@ fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cmd = args.first().map(String::as_str).unwrap_or("help");
     if cmd == "--version" {
-        println!("gardengate 0.0.2 (download-only developer preview)");
+        println!("gardengate 0.0.2 (two-way developer preview)");
         return Ok(());
     }
     if cmd == "help" || cmd == "--help" {
-        println!("Garden Gate for Omarchy 0.0.2 — developer preview\n\nDownload-only: iCloud Drive → local inbox. No cloud writes or deletions.\n\n  setup               Connect Apple and choose a folder with desktop dialogs\n  manage              Open the Garden Gate management menu\n  connect             Configure encrypted account connection (interactive)\n  folders [path]      List accessible iCloud Drive folders\n  add FOLDER LOCAL    Select one folder and an empty absolute local directory\n  plan                Show cloud folder size and current local contents\n  pull --apply        Download now and approve background downloading\n  watch               Download every 60s; used by systemd\n  background on|off   Enable/resume or stop background downloads\n  pause | resume      Pause/resume an already-enabled watcher\n  status              Print JSON state and preserved conflict-copy paths\n  open                Open the local folder\n  recovery            Open preserved competing cloud copies\n\nCreate 'Omarchy Inbox' in iPhone Files → iCloud Drive, then use that folder.\nSetup uses desktop dialogs; connect offers terminal troubleshooting. Two-way sync\nand Reflect compatibility are not implemented in this preview.");
+        println!(
+            "Garden Gate for Omarchy 0.0.2 — developer preview
+
+Download-only by default; two-way mode requires explicit opt-in.
+
+  setup | manage       Graphical account setup and management
+  connect              Interactive terminal account setup
+  folders [path]       List iCloud folders
+  add FOLDER LOCAL     Choose a folder and an empty local destination
+  plan                 Preview the current mode
+  pull --apply         Download only (refused in two-way mode)
+  two-way plan         Check two-way prerequisites without cloud writes
+  two-way enable --apply   Initialize two-way sync; leave background paused
+  sync --apply         Run an enabled two-way sync
+  two-way recover --apply  Explicitly rebuild history after reviewing both folders
+  two-way disable      Return to download-only; pause background transfers
+  transfer --apply     Run the selected mode (manual systemd job)
+  watch                Run the selected mode every 60s; used by systemd
+  background on|off    Enable/resume or stop background transfers
+  pause | resume       Pause/resume an enabled watcher
+  status               Local JSON status, conflicts and recovery paths
+  open | recovery      Open local files or recovery storage
+
+Two-way mode propagates deletions and retains recovery copies. Recovery may
+restore previously deleted files. Do not edit during initialization/recovery.
+Real iCloud acceptance remains required; Reflect is not supported."
+        );
         return Ok(());
     }
     let paths = Paths::discover()?;
@@ -90,6 +117,7 @@ fn run() -> Result<()> {
                 local,
                 approved: false,
                 paused: false,
+                mode: SyncMode::DownloadOnly,
             })?;
             println!("Folder selected. Run plan, then pull --apply when ready.");
             Ok(())
@@ -97,6 +125,11 @@ fn run() -> Result<()> {
         "plan" => {
             let _lock = paths.lock()?;
             let p = paths.profile()?;
+            if p.mode == SyncMode::TwoWay {
+                let r = Rclone::managed(&paths)?;
+                println!("{}", Engine::new(&paths, &p, &r).preview()?);
+                return Ok(());
+            }
             validate_folder(&p.remote_folder)?;
             reject_symlinks(&p.local)?;
             let r = Rclone::managed(&paths)?;
@@ -118,13 +151,48 @@ fn run() -> Result<()> {
             println!("iCloud folder: {:?}\nLocal directory: {:?}\nCloud files: {}\nCloud bytes: {}\nLocal files: {}\nNo cloud writes. No local/cloud deletions.\nChanged local files are preserved; conflicting cloud versions go to recovery storage.\nThis preview stages the whole cloud folder each cycle; choose a SMALL folder.\nRun pull --apply to approve downloading.",p.remote_folder,p.local,v["count"],v["bytes"],walk(&p.local)?.len());
             Ok(())
         }
-        "pull" => {
-            if args.get(1).map(String::as_str) != Some("--apply") {
-                bail!("Use plan first, then pull --apply")
+        "two-way" => {
+            let _lock = paths.lock()?;
+            let mut p = paths.profile()?;
+            if args.get(1).map(String::as_str) == Some("disable") && args.len() == 2 {
+                p.schema = 2;
+                p.mode = SyncMode::DownloadOnly;
+                p.approved = false;
+                p.paused = true;
+                paths.save_profile(&p)?;
+                println!("Download-only mode selected. Background transfers are paused. Recovery copies and two-way history are retained. Use pull --apply before resuming downloads.");
+                return Ok(());
+            }
+            let r = Rclone::managed(&paths)?;
+            let engine = Engine::new(&paths, &p, &r);
+            match args.get(1).map(String::as_str) {
+                Some("plan") if args.len() == 2 => println!("{}", engine.preview()?),
+                Some(action @ ("enable" | "recover"))
+                    if args.len() == 3 && args[2] == "--apply" =>
+                {
+                    let report = engine.execute(if action == "enable" {
+                        Action::Enable
+                    } else {
+                        Action::Recover
+                    })?;
+                    println!("{}\nTwo-way sync is ready. Background transfers remain paused; use background on to resume.", serde_json::to_string_pretty(&report)?);
+                }
+                _ => bail!("Usage: two-way plan | enable --apply | recover --apply | disable"),
+            }
+            Ok(())
+        }
+        "pull" | "sync" | "transfer" => {
+            if args.len() != 2 || args[1] != "--apply" {
+                bail!("Use plan first, then {cmd} --apply")
             };
             let _lock = paths.lock()?;
             let mut p = paths.profile()?;
-            let report = pull(&paths, &p)?;
+            if (cmd == "pull" && p.mode != SyncMode::DownloadOnly)
+                || (cmd == "sync" && p.mode != SyncMode::TwoWay)
+            {
+                bail!("Command does not match the configured sync mode; use plan first");
+            }
+            let report = transfer(&paths, &p)?;
             p.approved = true;
             paths.save_profile(&p)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
@@ -160,7 +228,7 @@ fn run() -> Result<()> {
         },
         "recovery" => {
             // Open the owned parent, never a path supplied by a conflict record.
-            let directory = paths.state.join("conflicts");
+            let directory = paths.state.clone();
             reject_symlinks(&directory)?;
             if !directory.is_dir() {
                 println!("No competing cloud copies have been recorded.");
@@ -246,6 +314,26 @@ fn prepare_connection(paths: &Paths) -> Result<()> {
     paths.encrypted_config()?;
     Ok(())
 }
+fn transfer(paths: &Paths, p: &Profile) -> Result<Report> {
+    let result = match p.mode {
+        SyncMode::DownloadOnly => pull(paths, p),
+        SyncMode::TwoWay => {
+            Rclone::managed(paths).and_then(|r| Engine::new(paths, p, &r).execute(Action::Sync))
+        }
+    };
+    if let Err(error) = &result {
+        let report = Report {
+            schema: 1,
+            state: "failed".into(),
+            checked_at: now(),
+            error: Some(error.to_string()),
+            ..Default::default()
+        };
+        let _ = atomic_json(&paths.state.join("status.json"), &report);
+    }
+    result
+}
+
 fn pull(paths: &Paths, p: &Profile) -> Result<Report> {
     let stage = paths.state.join("staging");
     let result: Result<Report> = (|| {
@@ -313,7 +401,7 @@ fn watch(paths: &Paths) -> Result<()> {
             Ok(_operation) => {
                 let p = paths.profile()?;
                 if p.approved && !p.paused {
-                    pull(paths, &p).is_ok()
+                    transfer(paths, &p).is_ok()
                 } else {
                     true
                 }
