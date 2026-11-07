@@ -75,6 +75,8 @@ The Qt menu offers graphical Apple sign-in, folder browsing, preview, download, 
 
 ## Two-way mode
 
+For guarded XPS/iPhone acceptance, use the [disposable-folder acceptance runner](acceptance/README.md). It separates read-only checks from typed approvals for cloud writes, deletion tests, interruption and explicit recovery. Live acceptance remains outstanding.
+
 See the [two-way guide](../README.md#two-way-sync) for enabling, conflicts, recovery and switching back. It requires exactly rclone 1.75.1. The menu offers a **Sync mode and recovery** submenu; enabling never implicitly starts background syncing. `pull --apply` is refused while two-way mode is selected, so the two engines never update the same files concurrently.
 
 ## Download-only file behaviour
