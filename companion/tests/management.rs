@@ -103,6 +103,7 @@ esac
             local: self.temp.path().join("inbox"),
             approved,
             paused,
+            mode: SyncMode::DownloadOnly,
         })?;
         fs::write(
             self.paths.config.join("rclone.conf"),
@@ -210,7 +211,7 @@ fn status_distinguishes_setup_approval_busy_and_conflicts() -> Result<()> {
 #[test]
 fn unreadable_or_future_profile_never_reopens_setup() -> Result<()> {
     let f = Fixture::new()?;
-    for content in ["broken JSON".to_string(), json!({"schema": 2, "remote_folder": "Inbox", "local": "/fixture/inbox", "approved": true, "paused": false}).to_string()] {
+    for content in ["broken JSON".to_string(), json!({"schema": 99, "remote_folder": "Inbox", "local": "/fixture/inbox", "approved": true, "paused": false}).to_string()] {
         let profile = f.paths.config.join("profile.json");
         fs::write(&profile, &content)?;
         assert!(!f.run(&["manage"])?.status.success());
@@ -241,5 +242,184 @@ fn early_transfer_failure_replaces_stale_success_without_approving_downloads() -
     assert_eq!(f.status()?["last_check"]["state"], "failed");
     assert!(!f.temp.path().join("provider.log").exists());
     assert!(!Path::new(&f.paths.state.join("staging")).exists());
+    Ok(())
+}
+
+#[test]
+fn mode_switch_requires_explicit_apply_and_blocks_the_wrong_transfer_command() -> Result<()> {
+    let f = Fixture::new()?;
+    f.profile(true, false)?;
+    for args in [
+        vec!["two-way", "enable"],
+        vec!["two-way", "recover"],
+        vec!["sync", "--apply"],
+    ] {
+        assert!(!f.run(&args)?.status.success());
+        assert_eq!(f.paths.profile()?.mode, SyncMode::DownloadOnly);
+    }
+    assert!(!f.temp.path().join("provider.log").exists());
+    let mut p = f.paths.profile()?;
+    p.schema = 2;
+    p.mode = SyncMode::TwoWay;
+    f.paths.save_profile(&p)?;
+    assert!(!f.run(&["pull", "--apply"])?.status.success());
+    assert!(!f.run(&["background", "on"])?.status.success());
+    assert_eq!(f.status()?["state"], "recovery-required");
+    assert!(!f.temp.path().join("provider.log").exists());
+    let lock = f.paths.lock()?;
+    assert!(!f.run(&["two-way", "disable"])?.status.success());
+    drop(lock);
+    assert!(f.run(&["two-way", "disable"])?.status.success());
+    let p = f.paths.profile()?;
+    assert_eq!(p.mode, SyncMode::DownloadOnly);
+    assert!(p.paused);
+    assert!(!p.approved);
+    assert_eq!(
+        p.schema, 2,
+        "Older binaries must still refuse the migrated profile"
+    );
+    Ok(())
+}
+
+#[test]
+fn two_way_status_is_local_and_exposes_recovery_and_conflict_paths() -> Result<()> {
+    use gardengate::two_way::{Phase, SyncState};
+    let f = Fixture::new()?;
+    f.profile(true, true)?;
+    let mut p = f.paths.profile()?;
+    p.schema = 2;
+    p.mode = SyncMode::TwoWay;
+    f.paths.save_profile(&p)?;
+    atomic_json(
+        &f.paths.state.join("two-way.json"),
+        &SyncState {
+            schema: 1,
+            id: "a".repeat(32),
+            generation: "b".repeat(32),
+            local: p.local,
+            remote: "icloud:Inbox".into(),
+            initialized: true,
+            phase: Phase::Ready,
+            conflicts: vec![
+                "note.gardengate-local1".into(),
+                "note.gardengate-cloud1".into(),
+            ],
+            last_completed_at: Some(now()),
+            last_error: None,
+        },
+    )?;
+    let status = f.status()?;
+    assert_eq!(status["mode"], "two-way");
+    assert_eq!(status["state"], "needs-review");
+    assert!(status["cloud_recovery"]
+        .as_str()
+        .unwrap()
+        .starts_with("icloud:Inbox.gardengate-recovery-"));
+    fs::write(f.temp.path().join("open-status"), "")?;
+    assert!(f.run(&["manage"])?.status.success());
+    let dialogs = fs::read_to_string(f.temp.path().join("dialog.log"))?;
+    assert!(dialogs.contains("Sync now"));
+    assert!(dialogs.contains("note.gardengate-cloud1"));
+    assert!(!f.temp.path().join("provider.log").exists());
+    fs::remove_file(f.paths.config.join("rclone.conf"))?;
+    assert!(!f.run(&["sync", "--apply"])?.status.success());
+    assert_eq!(f.status()?["last_check"]["state"], "failed");
+    Ok(())
+}
+
+#[test]
+fn corrupted_two_way_state_and_missing_mode_fail_closed() -> Result<()> {
+    let f = Fixture::new()?;
+    f.profile(true, false)?;
+    let mut p = serde_json::to_value(f.paths.profile()?)?;
+    p["schema"] = json!(2);
+    p.as_object_mut().unwrap().remove("mode");
+    atomic_json(&f.paths.config.join("profile.json"), &p)?;
+    assert!(!f.run(&["transfer", "--apply"])?.status.success());
+    assert!(!f.run(&["manage"])?.status.success());
+    f.profile(true, false)?;
+    fs::write(f.paths.state.join("two-way.json"), "broken")?;
+    assert!(!f.run(&["two-way", "enable", "--apply"])?.status.success());
+    assert!(!f.temp.path().join("provider.log").exists());
+    Ok(())
+}
+
+#[test]
+fn cancelling_a_two_way_job_reaps_the_provider_and_requires_recovery() -> Result<()> {
+    use gardengate::two_way::{Phase, SyncState, ACCESS_FILE};
+    use std::{
+        thread,
+        time::{Duration, Instant},
+    };
+    let f = Fixture::new()?;
+    f.profile(true, false)?;
+    let mut p = f.paths.profile()?;
+    p.schema = 2;
+    p.mode = SyncMode::TwoWay;
+    f.paths.save_profile(&p)?;
+    fs::create_dir_all(&p.local)?;
+    fs::write(p.local.join(ACCESS_FILE), "a".repeat(32))?;
+    atomic_json(
+        &f.paths.state.join("two-way.json"),
+        &SyncState {
+            schema: 1,
+            id: "a".repeat(32),
+            generation: "b".repeat(32),
+            local: p.local,
+            remote: "icloud:Inbox".into(),
+            initialized: true,
+            phase: Phase::Ready,
+            conflicts: vec![],
+            last_completed_at: Some(now()),
+            last_error: None,
+        },
+    )?;
+    fs::write(
+        f.temp.path().join("bin/rclone"),
+        r#"#!/usr/bin/python3
+import os, sys, time
+from pathlib import Path
+args = sys.argv[1:]
+root = Path(os.environ['FIXTURE'])
+if 'version' in args:
+    print('rclone v1.75.1')
+elif 'copy' in args:
+    pass
+elif 'cat' in args:
+    sys.stdout.write('a' * 32)
+elif 'bisync' in args:
+    (root / 'provider.pid').write_text(str(os.getpid()))
+    time.sleep(60)
+else:
+    sys.exit(8)
+"#,
+    )?;
+    let mut child = f.command(&["transfer", "--apply"]).spawn()?;
+    let pid_file = f.temp.path().join("provider.pid");
+    let start = Instant::now();
+    while !pid_file.exists() && start.elapsed() < Duration::from_secs(5) {
+        thread::sleep(Duration::from_millis(20));
+    }
+    if !pid_file.exists() {
+        let _ = child.kill();
+        panic!("provider never reached bisync");
+    }
+    assert!(Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()?
+        .success());
+    assert!(!child.wait()?.success());
+    let provider_pid = fs::read_to_string(pid_file)?;
+    assert!(!Command::new("kill")
+        .args(["-0", &provider_pid])
+        .output()?
+        .status
+        .success());
+    assert_eq!(
+        SyncState::read(&f.paths)?.unwrap().phase,
+        Phase::RecoveryRequired
+    );
+    assert!(!f.run(&["sync", "--apply"])?.status.success());
+    let _lock = f.paths.lock()?;
     Ok(())
 }

@@ -4,7 +4,7 @@
 
 Download files from a selected iCloud Drive folder into an ordinary local inbox on your Linux desktop.
 
-**0.0.2 developer preview: download-only, not the completed spec.** Rust companion and background watcher, with guided desktop sign-in and folder selection via kdialog. rclone supplies Apple authentication through its non-interactive configuration protocol; terminal setup remains a troubleshooting option. Two-way sync, live-tested bar/Perch integration, Reflect app-container compatibility and Photos are deferred. The community badge is an identity label, not official approval.
+**0.0.2 development branch: download-only by default, with opt-in two-way sync.** Rust companion and background watcher, with guided desktop sign-in and folder selection via kdialog. rclone supplies Apple authentication through its non-interactive configuration protocol; terminal setup remains a troubleshooting option. Live-tested bar/Perch integration, Reflect app-container compatibility and Photos are deferred. The community badge is an identity label, not official approval.
 
 ## Install on the XPS
 
@@ -57,7 +57,7 @@ The initial destination must be empty. Inspect the preview, then approve the dow
 ~/.local/bin/gardengate open
 ```
 
-Your test document should now be in the XPS inbox. That first successful transfer approves future background downloads. Choose **Enable or resume background downloads** in management, or use the equivalent command after this succeeds:
+Your test document should now be in the XPS inbox. That first successful transfer approves future background downloads. Choose **Enable or resume background transfers** in management, or use the equivalent command after this succeeds:
 
 ```bash
 ~/.local/bin/gardengate background on
@@ -73,7 +73,13 @@ Open **Garden Gate (Preview)** in the launcher, or run:
 
 The Qt menu offers graphical Apple sign-in, folder browsing, preview, download, readable status, background-service controls, and actions to open the inbox or preserved conflict copies. Enabling background downloads starts the service and enables it at sign-in; turning them off stops and disables it. A failed start is reported and retains the previous pause setting. The wizard and live systemd/keyring interaction still need XPS validation.
 
-## File behaviour
+## Two-way mode
+
+For guarded XPS/iPhone acceptance, use the [disposable-folder acceptance runner](acceptance/README.md). It separates read-only checks from typed approvals for cloud writes, deletion tests, interruption and explicit recovery. Live acceptance remains outstanding.
+
+See the [two-way guide](../README.md#two-way-sync) for enabling, conflicts, recovery and switching back. It requires exactly rclone 1.75.1. The menu offers a **Sync mode and recovery** submenu; enabling never implicitly starts background syncing. `pull --apply` is refused while two-way mode is selected, so the two engines never update the same files concurrently.
+
+## Download-only file behaviour
 
 - Never uploads to or deletes from iCloud.
 - Cloud deletion leaves downloaded local files intact. Rename appears as a new download; the previous local path remains.
@@ -92,7 +98,7 @@ The Qt menu offers graphical Apple sign-in, folder browsing, preview, download, 
 systemctl --user status gardengate.service
 ```
 
-The legacy `pause`/`resume` commands only change the pause flag for an already-enabled watcher; they do not start it. They refuse while another operation holds the lock. Use **Turn off background downloads** or `background off` to stop the watcher even during a transfer; manual download jobs are independent. Signal handling kills/reaps an active rclone child and retains local files. No realtime collaboration guarantee: a file editor writing at the exact replacement boundary can still race with reconciliation. Test with disposable data and avoid editing an inbox file during its download.
+The legacy `pause`/`resume` commands only change the pause flag for an already-enabled watcher; they do not start it. They refuse while another operation holds the lock. Use **Turn off background transfers** or `background off` to stop the watcher even during a transfer; manual download jobs are independent. Signal handling kills/reaps an active rclone child and retains local files. No realtime collaboration guarantee: a file editor writing at the exact replacement boundary can still race with reconciliation. Test with disposable data and avoid editing an inbox file during its download.
 
 ## Reconnect and remove
 

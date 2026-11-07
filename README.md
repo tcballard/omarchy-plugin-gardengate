@@ -2,25 +2,26 @@
 
 [![Built for Omarchy: Plugin](https://raw.githubusercontent.com/tcballard/omarchy-badges/75975e5b5bf75e7ede3764bcd2950046f7abfe2c/badges/v1/omarchy-plugin.svg)](https://github.com/tcballard/omarchy-badges)
 
-Bring files from your iPhone's iCloud Drive to an ordinary folder on your Omarchy desktop.
+Share an iCloud Drive folder between your iPhone and an ordinary folder on your Omarchy desktop.
 
-**0.0.2 developer preview.** Garden Gate is a hosted Quattro bar widget plus a Rust companion. Click the widget to open the Qt management menu. The companion downloads a selected folder, preserves local edits and keeps recovery copies. It never uploads to or deletes from iCloud.
+**0.0.2 developer preview.** Garden Gate is a hosted Quattro bar widget plus a Rust companion. Click the widget to open the Qt management menu. The companion starts in download-only mode. You can explicitly enable two-way sync to upload local edits and propagate changes and deletions in both directions, with preserved conflicts and recovery copies.
 
 ## Features
 
 - Open management from a theme-coloured gate icon on horizontal or vertical bars.
 - Connect Apple and complete verification in desktop dialogs, then browse iCloud folders.
-- Download one selected iCloud Drive folder into a local inbox.
+- Download one selected iCloud Drive folder into a local inbox, or opt into two-way sync.
+- Preserve both conflicting versions and back up overwritten/deleted files in two-way mode.
 - Preserve local edits, replaced versions and competing cloud copies.
 - Enable or stop optional background downloads directly from management.
 - Read download errors and service status, and open the inbox or preserved conflict copies.
 
-Two-way sync, Apple Notes/Photos, Reflect container support, live bar status and conflict-resolution UI are deferred.
+Apple Notes/Photos, Reflect container support, live bar status and a conflict-resolution editor are deferred. Two-way sync is implemented on this development branch; real iCloud acceptance remains outstanding.
 
 ## Requirements
 
 - Omarchy 4 with Quattro shell-plugin support, on x86_64 Linux.
-- rclone 1.75.1+ (transport tests used 1.75.1).
+- rclone 1.75.1+ for download-only; two-way mode currently requires exactly 1.75.1, the tested adapter version.
 - libsecret with a running, unlocked desktop Secret Service.
 - kdialog for the Qt management menu and systemd user services for background downloads.
 - Python 3 (included with Omarchy) to run the prebuilt installer. Rust/Cargo are only needed by developers building from source.
@@ -87,9 +88,46 @@ In rclone choose a new remote named `icloud`, storage `iclouddrive`, service `dr
 ~/.local/bin/gardengate open
 ```
 
+### Two-way sync
+
+After installing this branch's companion, open **Sync mode and recovery** in management. Choose **Check two-way setup**, then **Enable two-way sync…**. The terminal equivalent is:
+
+```bash
+~/.local/bin/gardengate two-way plan
+~/.local/bin/gardengate two-way enable --apply
+~/.local/bin/gardengate sync --apply
+~/.local/bin/gardengate background on
+```
+
+Enabling two-way mode performs the first sync and leaves background transfers paused. Resume them separately when you have checked the result. Existing profiles stay download-only until you opt in. Stop editing on all devices during initialization or recovery. If the same path has different contents on both sides, setup stops without changing either document: rename one version or make the copies identical, then retry.
+
+Normal runs propagate new files, edits, renames and deletions. When both sides edit a file, both versions are renamed with numbered `.gardengate-local` and `.gardengate-cloud` suffixes and copied to both folders. **Status and last transfer** lists them. Resolve manually by keeping the contents you want under the original name and removing the unwanted conflict files, then sync again.
+
+Replaced/deleted local files are kept below `$XDG_STATE_HOME/gardengate/recovery/`. Replaced/deleted cloud files go to a sibling folder named `<selected folder>.gardengate-recovery-<id>` in iCloud. Each run has its own backup directory. **Open recovery copies** opens the local state folder, which also contains older `backups/` and `conflicts/`; status shows the exact cloud recovery path. There is no automatic pruning.
+
+A hidden `.gardengate-access` file binds both folders to this mapping. Keep it on both sides. Missing/mismatched markers, unavailable folders, name collisions, unsupported rclone versions and deletion bursts above rclone's 50% threshold stop the run. The engine also limits deleted bytes to 128 MiB. A failed/interrupted bisync requires explicit recovery; it never automatically runs `--resync`:
+
+```bash
+~/.local/bin/gardengate two-way plan
+~/.local/bin/gardengate two-way recover --apply
+```
+
+Review both folders before recovery. Recovery retains old history and creates a fresh baseline from the **union** of the two folders, so previously deleted files can return. Divergent same-name versions must be resolved first. If a marker or application state was removed, restore it from backup; do not delete history to force a sync. A stopped bulk deletion should be reviewed and recovered rather than bypassing the guard.
+
+To return to download-only:
+
+```bash
+~/.local/bin/gardengate two-way disable
+~/.local/bin/gardengate pull --apply
+```
+
+This pauses background transfers and retains recovery/history. Re-enabling later uses the explicit recovery flow. Once migrated, older companions refuse the profile rather than treating it as download-only.
+
+Two-way mode supports small folders up to 512 MiB per side. Each cycle still downloads a preflight snapshot, and checksums may require additional reads. Empty directories are not synchronized. `.git/`, `.reflect/` and `.DS_Store` stay excluded. NFC/case and file/directory collisions, symlinks and special local files are rejected. Bisync is file-level synchronization: it does not merge document contents or guarantee lossless simultaneous editing. The preflight and the subsequent provider writes are not an atomic transaction.
+
 ### Background downloads
 
-After checking the first transfer, choose **Enable or resume background downloads** in the Garden Gate menu. This starts the watcher and enables it when you next sign in. **Turn off background downloads** stops the watcher and disables that automatic start; manual downloads remain available. No extra terminal step is needed. The equivalent optional command is:
+After checking the first transfer, choose **Enable or resume background transfers** in the Garden Gate menu. This starts the watcher and enables it when you next sign in. **Turn off background transfers** stops the watcher and disables that automatic start; manual downloads remain available. No extra terminal step is needed. The equivalent optional command is:
 
 ```bash
 ~/.local/bin/gardengate background on
@@ -97,7 +135,7 @@ After checking the first transfer, choose **Enable or resume background download
 
 The first successful manual download approves background transfers; enabling them before that is refused. The watcher checks around 60 seconds after each cycle and backs off on errors. This preview stages the whole selected folder each cycle, with a 512 MiB cap. Start with disposable files in a small folder.
 
-**Status and last download** shows saved transfer results, any download error and the actual background service state. Opening status does not contact Apple. **Open recovery copies** opens preserved competing cloud files for inspection; conflict resolution remains manual. The menu refreshes when an action returns, and status refreshes when opened.
+**Status and last transfer** shows saved transfer results, any download error and the actual background service state. Opening status does not contact Apple. **Open recovery copies** opens preserved competing cloud files for inspection; conflict resolution remains manual. The menu refreshes when an action returns, and status refreshes when opened.
 
 [Companion instructions](companion/README.md) explain account setup, conflicts, pause/resume, limitations and removal.
 
@@ -136,7 +174,7 @@ cargo build --locked --release
 Optional transport tests use a real rclone binary with disposable local endpoints:
 
 ```bash
-RCLONE_TEST_BIN=/absolute/path/to/rclone cargo test --locked --test transport -- --include-ignored
+RCLONE_TEST_BIN=/absolute/path/to/rclone cargo test --locked --test transport --test two_way -- --include-ignored
 ```
 
 See [verification](companion/VERIFICATION.md) for reproduced and unrun checks, and [design](DESIGN.md) for the implementation record.

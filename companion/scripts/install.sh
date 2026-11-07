@@ -34,4 +34,4 @@ else
   sed "s|^Exec=.*|Exec=\"$HOME/.local/bin/gardengate\" manage|" "$project_dir/packaging/io.github.tcballard.gardengate.desktop" > "$HOME/.local/share/applications/io.github.tcballard.gardengate.desktop"
 fi
 systemctl --user daemon-reload
-printf '\nInstalled download-only preview. It has NOT signed in or started syncing.\nRun: ~/.local/bin/gardengate connect\nThen follow README.md to select a folder and approve the first download.\n'
+printf '\nInstalled Garden Gate preview (download-only by default; two-way is opt-in). It has NOT signed in or started syncing.\nRun: ~/.local/bin/gardengate connect\nThen follow README.md to select a folder and approve the first download.\n'

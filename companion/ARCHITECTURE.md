@@ -1,6 +1,6 @@
 # Architecture and implementation scope
 
-One Rust executable owns setup, profile validation, local reconciliation, process lifetime and persistence. rclone is an external adapter; no Apple API is reimplemented. The prototype deliberately implements the immediate iPhone → XPS workflow as a download-only slice rather than prematurely enabling bisync.
+One Rust executable owns setup, profile validation, local reconciliation, process lifetime and persistence. rclone is an external adapter; no Apple API is reimplemented. Download-only remains the default. An explicit mode switch hands the folder to a pinned rclone bisync adapter; the download reconciler does not run while two-way mode is selected.
 
 All setup, mapping and download mutations take a process-wide advisory operation lock. A second lock prevents duplicate watchers. The service owns its rclone child, bounds transfers to five minutes, handles SIGINT/SIGTERM, kills/reaps before releasing locks, and backs off failures. systemd KillMode=control-group handles forced termination. There is no Unix socket/event stream yet: management invokes typed CLI commands, and manual background downloads use a systemd oneshot service.
 
@@ -14,4 +14,16 @@ Qt kdialog provides a small mouse-friendly management menu, not the planned full
 
 Its use and systemd actions are covered by compiled-companion fixtures but not visually/live-tested on Omarchy. The root shell plugin ships a static bar launcher for this menu. Live toolkit and service integration must be validated before adding a hosted panel, sync-status widget or Perch adapter.
 
-Next: real account sign-in + phone download evidence; incremental cloud staging; structured conflict resolution; then deliberate two-way engine integration and live conflict tests. M0 remains blocked on account evidence; M1 is only partially implemented. The proposed spec is retained unchanged in docs/SPEC.md.
+Next: real account sign-in, phone upload/download and live conflict evidence; incremental cloud staging; structured conflict resolution. M0 remains blocked on account evidence; M1 is only partially implemented. The proposed spec is retained unchanged in docs/SPEC.md.
+
+## Two-way mode
+
+`two_way.rs` owns a separate schema-versioned journal and bisync work directory. Profile schema 1 defaults to download-only; enabling writes schema 2 with an explicit mode so older binaries fail closed. A mode switch pauses and resets background approval until the first two-way run succeeds. The existing operation lock covers CLI, mode changes, setup and watcher runs. The manual oneshot invokes `transfer --apply`, which dispatches the selected mode; explicit `pull` and `sync` refuse the opposite mode.
+
+The adapter requires rclone 1.75.1. Before bisync it validates both namespaces, NFC/case/file-directory collisions, local special files and the 512 MiB limit via a fresh cloud snapshot. Initialization/recovery refuses differing same-path content. A random mapping marker is checked by content on both roots; ordinary sync and recovery never recreate a missing initialized marker. The remote/local mapping is bound to the journal.
+
+Each mutation records `running` durably before spawning bisync. A failed run records `recovery-required`; an abrupt process death leaves `running`. Both block future ordinary syncs. Only explicit recovery selects a fresh work directory and runs `--resync`; old listings, backups and locks are retained. Recovery copies the union, can restore deletions, and does not select a winner between different versions. Preflight failures occur before mutations and can be retried.
+
+Bisync handles all ongoing reconciliation with content checksums (downloading hashes where needed), numbered conflicts on both roots, access checks, a 50% deletion threshold, a 128 MiB deletion-byte cap and per-run backup directories outside both roots. No cleanup or timestamp-winner policy is enabled. Local status lists preserved conflict filenames and recovery locations without contacting Apple. Inherited `RCLONE_*` overrides are removed from transport children.
+
+Snapshots and writes are not transactional. An intervening edit can still race after preflight. iCloud backend move/backup semantics, throttling, authentication expiry and actual phone round trips require live acceptance. Empty directories and semantic document merging are not supported. This is not a lossless collaboration claim.

@@ -1,6 +1,7 @@
 //! Management uses local state and systemd properties; status never contacts Apple.
 use super::{dialog, setup, show_command};
 use anyhow::{bail, Context, Result};
+use gardengate::two_way::{Phase, SyncState};
 use gardengate::*;
 use serde::Serialize;
 use std::{
@@ -88,6 +89,9 @@ pub struct Snapshot {
     background: ServiceState,
     manual_download: ServiceState,
     operation_busy: bool,
+    two_way: Option<SyncState>,
+    local_recovery: String,
+    cloud_recovery: Option<String>,
 }
 
 impl Snapshot {
@@ -110,9 +114,12 @@ impl Snapshot {
             }
             Err(e) => return Err(e),
         };
+        let two_way = SyncState::read(paths)?;
+        let mode = profile.as_ref().map(|p| p.mode).unwrap_or_default();
+        let cloud_recovery = two_way.as_ref().map(SyncState::remote_recovery);
         let mut snapshot = Self {
             schema: 1,
-            mode: "download-only",
+            mode: mode.label(),
             state: "unconfigured",
             profile,
             last_check,
@@ -120,20 +127,40 @@ impl Snapshot {
             background: ServiceState::read(WATCH),
             manual_download: ServiceState::read(MANUAL),
             operation_busy,
+            two_way,
+            local_recovery: paths.state.to_string_lossy().into_owned(),
+            cloud_recovery,
         };
         snapshot.state = if snapshot.manual_download.running() {
-            "downloading"
+            if mode == SyncMode::TwoWay {
+                "syncing"
+            } else {
+                "downloading"
+            }
         } else if snapshot.operation_busy {
             "busy"
         } else if snapshot.profile.is_none() {
             "unconfigured"
+        } else if mode == SyncMode::TwoWay
+            && snapshot
+                .two_way
+                .as_ref()
+                .is_none_or(|s| s.phase != Phase::Ready)
+        {
+            "recovery-required"
         } else if snapshot
             .last_check
             .as_ref()
             .is_some_and(|r| r.state == "failed")
         {
             "failed"
-        } else if !snapshot.conflict_copies.is_empty() {
+        } else if (mode == SyncMode::DownloadOnly && !snapshot.conflict_copies.is_empty())
+            || (mode == SyncMode::TwoWay
+                && snapshot
+                    .two_way
+                    .as_ref()
+                    .is_some_and(|s| !s.conflicts.is_empty()))
+        {
             "needs-review"
         } else if !snapshot.profile.as_ref().unwrap().approved {
             "approval-required"
@@ -153,8 +180,22 @@ impl Snapshot {
             "failed" => "Last download failed — open Status for details",
             "needs-review" => "Competing file versions need review",
             "approval-required" => "First download required — choose Download now",
-            "paused" => "Background downloads paused",
+            "paused" => "Background transfers paused",
             _ => "Waiting for the next download",
+        };
+        let state = match self.state {
+            "syncing" => "Two-way sync running or queued",
+            "recovery-required" => {
+                "Sync stopped — review both folders, then choose Rebuild two-way history"
+            }
+            _ => state,
+        };
+        let state = if self.mode == "two-way" {
+            state
+                .replace("download", "sync")
+                .replace("Download", "Sync")
+        } else {
+            state.to_owned()
         };
         format!("{state}\nBackground service: {}", self.background.label())
     }
@@ -171,11 +212,20 @@ impl Snapshot {
         if let Some(r) = &self.last_check {
             let elapsed = now().saturating_sub(r.checked_at);
             text.push_str(&format!(
-                "\n\nLast download attempt: {} minutes ago\nNew files: {} · Updated: {}",
-                elapsed / 60,
-                r.downloaded,
-                r.updated
+                "\n\nLast {} attempt: {} minutes ago",
+                if self.mode == "two-way" {
+                    "sync"
+                } else {
+                    "download"
+                },
+                elapsed / 60
             ));
+            if self.mode == "download-only" {
+                text.push_str(&format!(
+                    "\nNew files: {} · Updated: {}",
+                    r.downloaded, r.updated
+                ));
+            }
             if let Some(error) = &r.error {
                 text.push_str(&format!("\n\n{error}"));
             }
@@ -185,7 +235,25 @@ impl Snapshot {
         if self.manual_download.active_state == "failed" {
             text.push_str("\n\nThe manual download job failed. Check the connection and choose Download now to retry.");
         }
-        if !self.conflict_copies.is_empty() {
+        if self.mode == "two-way" {
+            text.push_str("\n\nMode: two-way. Edits and deletions propagate in both directions.");
+            if let Some(s) = &self.two_way {
+                if !s.conflicts.is_empty() {
+                    text.push_str(
+                        "\n\nBoth conflicting versions are in the local/iCloud folder:\n",
+                    );
+                    text.push_str(&s.conflicts.join("\n"));
+                }
+                if let Some(error) = &s.last_error {
+                    text.push_str(&format!("\n\n{error}"));
+                }
+            }
+            if let Some(cloud) = &self.cloud_recovery {
+                text.push_str(&format!("\n\niCloud recovery folder: {cloud}"));
+            }
+            text = text.replace("download", "sync").replace("Download", "Sync");
+        }
+        if self.mode == "download-only" && !self.conflict_copies.is_empty() {
             text.push_str(&format!("\n\n{} competing cloud copies are preserved. Local edits are unchanged.\nChoose Open recovery copies to inspect them.", self.conflict_copies.len()));
         }
         text
@@ -198,7 +266,7 @@ fn service_action(args: &[&str]) -> Result<()> {
         .args(args)
         .stdin(Stdio::null())
         .output()
-        .context("Could not control background downloads; check your desktop session")?;
+        .context("Could not control background transfers; check your desktop session")?;
     if !output.status.success() {
         bail!("Could not change the download service. Check that the companion is installed and your desktop session is running. Open Status to see its current state.");
     }
@@ -209,13 +277,19 @@ pub fn background(paths: &Paths, enabled: bool) -> Result<()> {
     if !enabled {
         // Stop first: the watcher may hold the operation lock during a transfer.
         service_action(&["disable", "--now", WATCH])?;
-        println!("Background downloads stopped and disabled at sign-in. Manual downloads remain available.");
+        println!("Background transfers stopped and disabled at sign-in. Manual transfers remain available.");
         return Ok(());
     }
     let _lock = paths.lock()?;
     let mut p = paths.profile()?;
     if !p.approved {
-        bail!("Complete Download now successfully before enabling background downloads.");
+        bail!("Complete the first transfer in the selected mode before enabling background transfers.");
+    }
+    if p.mode == SyncMode::TwoWay && SyncState::read(paths)?.is_none_or(|s| s.phase != Phase::Ready)
+    {
+        bail!(
+            "Review and recover the interrupted two-way sync before enabling background transfers."
+        );
     }
     paths.encrypted_config()?;
     let was_paused = p.paused;
@@ -226,7 +300,7 @@ pub fn background(paths: &Paths, enabled: bool) -> Result<()> {
         paths.save_profile(&p)?;
         return Err(error);
     }
-    println!("Background downloads enabled. They also start when you sign in.");
+    println!("Background transfers enabled. They also start when you sign in.");
     Ok(())
 }
 
@@ -237,26 +311,37 @@ pub fn manage(paths: &Paths) -> Result<()> {
     loop {
         let snapshot = Snapshot::read(paths)?;
         let title = format!(
-            "Garden Gate · developer preview\n{}\nDownload-only: iPhone → XPS",
-            snapshot.summary()
+            "Garden Gate · developer preview\n{}\n{}",
+            snapshot.summary(),
+            if snapshot.mode == "two-way" {
+                "Two-way: iCloud ↔ XPS (including deletions)"
+            } else {
+                "Download-only: iPhone → XPS"
+            }
         );
         let Some(action) = dialog(&[
             "--menu",
             &title,
             "pull",
-            "Download now",
+            if snapshot.mode == "two-way" {
+                "Sync now"
+            } else {
+                "Download now"
+            },
             "status",
-            "Status and last download",
+            "Status and last transfer",
             "open",
             "Open local inbox",
             "recovery",
             "Open recovery copies",
             "background-on",
-            "Enable or resume background downloads",
+            "Enable or resume background transfers",
             "background-off",
-            "Turn off background downloads",
+            "Turn off background transfers",
             "preview",
-            "Preview download",
+            "Check current sync plan",
+            "mode",
+            "Sync mode and recovery…",
             "setup",
             "Connect or reconnect Apple Account",
             "add",
@@ -271,10 +356,11 @@ pub fn manage(paths: &Paths) -> Result<()> {
             "status" => Snapshot::read(paths)
                 .and_then(|current| dialog(&["--msgbox", &current.details()]).map(|_| ())),
             "preview" => show_command(&["plan"]),
+            "mode" => manage_mode(),
             "open" => show_command(&["open"]),
             "recovery" => show_command(&["recovery"]),
             "background-on" => {
-                if dialog(&["--yesno", "Enable background downloads?\n\nGarden Gate will check this folder about every minute and start again when you sign in. The first Download now must have completed successfully."])?.is_none() { continue; }
+                if dialog(&["--yesno", "Enable background transfers?\n\nGarden Gate will check this folder about every minute and start again when you sign in. The first transfer in the selected mode must have completed successfully."])?.is_none() { continue; }
                 show_command(&["background", "on"])
             }
             "background-off" => show_command(&["background", "off"]),
@@ -287,11 +373,15 @@ pub fn manage(paths: &Paths) -> Result<()> {
                     ])?;
                     continue;
                 }
-                if dialog(&["--yesno", "Download this folder now?\n\nLocal edits are preserved and competing cloud copies go to recovery storage. No cloud writes or deletions. A successful download lets you enable background downloads separately."])?.is_none() { continue; }
+                if dialog(&["--yesno", if snapshot.mode == "two-way" {
+                    "Sync this folder now?\n\nEdits and deletions propagate in both directions. Conflicting versions and recovery copies are retained."
+                } else {
+                    "Download this folder now?\n\nLocal edits are preserved and competing cloud copies go to recovery storage. No cloud writes or deletions. A successful download lets you enable background transfers separately."
+                }])?.is_none() { continue; }
                 service_action(&["start", "--no-block", MANUAL]).and_then(|_| {
                     dialog(&[
                         "--msgbox",
-                        "Download queued. Open Status to check completion or errors.",
+                        "Transfer queued. Open Status to check completion or errors.",
                     ])
                     .map(|_| ())
                 })
@@ -303,4 +393,44 @@ pub fn manage(paths: &Paths) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn manage_mode() -> Result<()> {
+    let Some(action) = dialog(&[
+        "--menu",
+        "Sync mode and recovery",
+        "two-way-plan",
+        "Check two-way setup",
+        "two-way-enable",
+        "Enable two-way sync…",
+        "two-way-recover",
+        "Rebuild two-way history…",
+        "two-way-disable",
+        "Switch to download-only…",
+    ])?
+    else {
+        return Ok(());
+    };
+    match action.as_str() {
+        "two-way-plan" => show_command(&["two-way", "plan"]),
+        "two-way-enable" | "two-way-recover" => {
+            let recover = action == "two-way-recover";
+            if dialog(&["--yesno", if recover {
+                    "Rebuild two-way history?\n\nReview both folders first and stop editing on all devices. Files present on either side will be copied to the other, so deleted files may return. Different versions with the same name block rebuilding. Old history and recovery copies are retained. Background transfers remain paused afterwards."
+                } else {
+                    "Enable two-way sync?\n\nLocal edits will upload to iCloud. Edits and deletions will propagate in both directions. Conflicts preserve both versions; replaced/deleted files go to recovery folders. Stop editing during setup. Different versions with the same name block setup. Background transfers remain paused until you resume them."
+                }])?.is_none() { return Ok(()); }
+            show_command(&[
+                "two-way",
+                if recover { "recover" } else { "enable" },
+                "--apply",
+            ])
+        }
+        "two-way-disable" => {
+            if dialog(&["--yesno", "Switch to download-only and pause background transfers?\n\nLocal files, two-way history and recovery copies are retained. Re-enabling two-way mode requires an explicit history rebuild."])?.is_none() { return Ok(()); }
+            show_command(&["two-way", "disable"])
+        }
+
+        _ => Ok(()),
+    }
 }

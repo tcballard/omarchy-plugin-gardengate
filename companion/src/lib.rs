@@ -14,6 +14,25 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+pub mod two_way;
+
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SyncMode {
+    #[default]
+    DownloadOnly,
+    TwoWay,
+}
+
+impl SyncMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::DownloadOnly => "download-only",
+            Self::TwoWay => "two-way",
+        }
+    }
+}
+
 pub static STOP: AtomicBool = AtomicBool::new(false);
 pub fn now() -> u64 {
     SystemTime::now()
@@ -28,6 +47,8 @@ pub struct Profile {
     pub local: PathBuf,
     pub approved: bool,
     pub paused: bool,
+    #[serde(default)]
+    pub mode: SyncMode,
 }
 #[derive(Default, Debug, Serialize, Deserialize)]
 pub struct Ledger {
@@ -91,8 +112,20 @@ impl Paths {
             .context("Choose an iCloud folder first")
     }
     pub fn optional_profile(&self) -> Result<Option<Profile>> {
-        let p: Option<Profile> = read_optional_json(&self.config.join("profile.json"))?;
-        if p.as_ref().is_some_and(|p| p.schema != 1) {
+        let value: Option<serde_json::Value> =
+            read_optional_json(&self.config.join("profile.json"))?;
+        if value
+            .as_ref()
+            .is_some_and(|v| v["schema"] == 2 && v.get("mode").is_none())
+        {
+            bail!(
+                "Sync mode is missing from the saved profile; existing configuration is unchanged"
+            );
+        }
+        let p: Option<Profile> = value.map(serde_json::from_value).transpose()?;
+        if p.as_ref().is_some_and(|p| {
+            !matches!(p.schema, 1 | 2) || (p.schema == 1 && p.mode != SyncMode::DownloadOnly)
+        }) {
             bail!("Unsupported profile schema; existing configuration is unchanged")
         }
         Ok(p)
@@ -383,6 +416,12 @@ impl Rclone {
     }
     pub fn command(&self) -> Command {
         let mut c = Command::new(&self.binary);
+        // Inherited flags must not weaken deletion/conflict policy or leak credentials.
+        for (name, _) in std::env::vars_os() {
+            if name.to_string_lossy().starts_with("RCLONE_") {
+                c.env_remove(name);
+            }
+        }
         c.arg("--config")
             .arg(&self.config)
             .env_remove("RCLONE_CONFIG_PASS")
@@ -417,10 +456,18 @@ impl Rclone {
                 let _ = child.kill();
                 let _ = child.wait();
                 break Err(anyhow::anyhow!(
-                    "Transfer interrupted or timed out; local files retained"
+                    "Transfer interrupted or timed out; inspect status and recovery copies before retrying"
                 ));
             }
-            if let Some(status) = child.try_wait()? {
+            let status = match child.try_wait() {
+                Ok(status) => status,
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break Err(error.into());
+                }
+            };
+            if let Some(status) = status {
                 break if status.success() {
                     fs::read(output_path).map_err(Into::into)
                 } else {
@@ -538,6 +585,7 @@ mod tests {
             local: t.path().join("l"),
             approved: false,
             paused: false,
+            mode: SyncMode::DownloadOnly,
         };
         let paths = Paths {
             config: t.path().join("c"),
@@ -547,7 +595,7 @@ mod tests {
         paths.save_profile(&p)?;
         assert_eq!(paths.profile()?.remote_folder, "Inbox");
         let mut p = p;
-        p.schema = 2;
+        p.schema = 99;
         paths.save_profile(&p)?;
         assert!(paths.profile().is_err());
         Ok(())

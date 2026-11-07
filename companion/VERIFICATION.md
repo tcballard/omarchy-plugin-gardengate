@@ -1,5 +1,60 @@
 # Verification — 1 October 2026
 
+## XPS acceptance harness — 7 November 2026
+
+Added `acceptance/xps.py` and its [XPS runbook](acceptance/README.md) on the existing
+`feat/two-way-sync` branch. This is acceptance tooling, not live acceptance or a
+release. The Python runner calls the actual companion; existing Rust and pinned
+real-rclone tests remain unchanged.
+
+Reproduced here: 12 account-free Python guard/evidence tests, all eight existing
+installer ownership checks, portable manifest/shell checks, CLI help and
+`git diff --check`. The new tests are included in `./tests/run` (and therefore
+both existing CI workflows). They cover identity/path/marker/mapping rejection,
+existing-folder refusal, approval gates, version pin, read-only preflight,
+manifest assertions, evidence snapshots, stopped-run/recovery guards, offline
+local-preservation checks and command failure recording. Provider operations in
+these Python tests are stubs, not iCloud acceptance.
+
+Rust/real-rclone suite NOT RERUN in this environment: Cargo is unavailable and
+installed rclone is 1.60.1-DEV, not the required 1.75.1. The previous 30-test result
+above is historical; do not attribute it to this revision. Use the runbook's
+existing-suite command and this revision's Actions results for fresh evidence.
+
+NOT RUN: Apple authentication, actual iCloud file/backup/move semantics, iPhone
+round trips, live interruption/recovery, physical network failure and native
+Omarchy keyring/menu/services. Mid-transfer network loss, quota exhaustion and
+Apple throttling remain separately unperformed even if the scripted offline
+check later passes. Production service names are deliberately never started by
+the harness; full native integration needs the documented disposable desktop
+user procedure. PR remains draft; no merge, release or live cloud writes.
+
+## Two-way development — 5 November 2026
+
+Implemented on `feat/two-way-sync` from `d6f3fe0`. No tag or release is created. Existing profiles remain download-only until an explicit mode switch. The production CLI, manual service, watcher and management menu share the same mode selection and operation lock.
+
+Reproduced with Rust 1.88.0 and checksum-verified rclone 1.75.1 (`982b5aa772841168f8e380f139e9e787b2a105403e32b94da8676a0e1c0a13ab` for the Linux amd64 ZIP):
+
+- 30 Rust tests, including 11 real-rclone transport scenarios (two existing transport tests and nine new two-way scenarios), nine compiled-companion management/cancellation tests, seven existing core tests, two setup tests and one legacy-mode test.
+- Upload/download, equal-length edits with and without backend hashes, both-sided conflicts, edit-versus-delete, rename/delete propagation, per-run recovery copies, divergent initialization, NFC/case collisions, exclusion rules, symlinks, missing roots/access markers, changed mappings, deletion bursts, interrupted state, explicit recovery and missing-history refusal.
+- SIGTERM during a blocked provider run kills/reaps the child, releases the operation lock and leaves recovery-required state. Status reads remain local. Tests also cover explicit opt-in, wrong-mode command refusal, schema migration, missing/corrupt state and early failure reporting.
+- Formatting, strict Clippy, rustdoc, release build, portable manifest checks and the eight installer ownership/launcher tests.
+
+```bash
+./tests/run
+cd companion
+cargo fmt --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo doc --locked --no-deps
+RCLONE_TEST_BIN=/absolute/path/to/rclone-1.75.1 cargo test --locked -- --include-ignored
+cargo build --locked --release
+```
+
+CI now downloads the checksum-pinned rclone binary and runs the transport/two-way tests explicitly; they remain opt-in for developers without that binary.
+
+Unrun: real Apple sign-in, iPhone ↔ XPS round trips, iCloud-specific backup/move semantics, real quota/network failures, keyring/systemd desktop integration and visual Omarchy acceptance. Local-backend tests cannot establish those. Initial setup/recovery requires idle editors; provider writes are not transactional. Empty directories and semantic document merging remain unsupported.
+
+
 ## Management and background downloads — 11 October 2026
 
 Continued the open 0.0.2 prebuilt-installer branch. Management now shows download errors, saved results and actual service state, controls watcher enablement without a terminal, and opens preserved conflict copies. Invalid saved profiles stop with an error rather than restarting setup; transfer preparation errors replace stale success reports.
